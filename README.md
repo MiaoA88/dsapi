@@ -45,7 +45,7 @@ DeepSeek 官方用量页只展示了几个基础数字和一张简表。这个�
 ## 安装
 
 1. 安装 [Tampermonkey](https://www.tampermonkey.net/) 浏览器扩展
-2. [点击安装脚本](https://greasyfork.org/scripts/XXXXXX) 或从 [Releases](https://github.com/codex/dsapi/releases) 下载
+2. [点击安装脚本](https://greasyfork.org/zh-CN/scripts/578066-deepseek-usage-%E5%AE%98%E6%96%B9api%E7%94%A8%E9%87%8F%E9%A1%B5%E5%A2%9E%E5%BC%BA%E4%BB%AA%E8%A1%A8%E7%9B%98) 或从 [Releases](https://github.com/codex/dsapi/releases) 下载
 3. 访问 [DeepSeek 开放平台用量页](https://platform.deepseek.com/usage) 并登录
 
 ## 兼容性
