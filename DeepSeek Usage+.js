@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         DeepSeek Usage+ — 官方用量页增强仪表盘
+// @name         DeepSeek Usage+ — 官方API用量页增强仪表盘
 // @namespace    https://platform.deepseek.com/
 // @version      1.7.0
 // @description  DeepSeek 官方用量页仅展示基础数字，本脚本扩展为完整仪表盘：费用细分、Token 构成、交互图表、模型明细。Turns the bare-bones official page into a full analytics dashboard.
-// @author       Codex
+// @author       miaoa88
 // @match        https://platform.deepseek.com/usage*
 // @run-at       document-idle
 // @grant        none
