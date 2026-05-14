@@ -1,0 +1,1725 @@
+// ==UserScript==
+// @name         DeepSeek Usage+ — 官方用量页增强仪表盘
+// @namespace    https://platform.deepseek.com/
+// @version      1.7.0
+// @description  DeepSeek 官方用量页仅展示基础数字，本脚本扩展为完整仪表盘：费用细分、Token 构成、交互图表、模型明细。Turns the bare-bones official page into a full analytics dashboard.
+// @author       Codex
+// @match        https://platform.deepseek.com/usage*
+// @run-at       document-idle
+// @grant        none
+// @require      https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js
+// ==/UserScript==
+
+(function () {
+  "use strict";
+
+  const PANEL_ID = "dsapi-plus-panel";
+  const STYLE_ID = "dsapi-plus-style";
+  const TOKEN_TYPES = {
+    request: "REQUEST",
+    response: "RESPONSE_TOKEN",
+    promptMiss: "PROMPT_CACHE_MISS_TOKEN",
+    promptHit: "PROMPT_CACHE_HIT_TOKEN",
+  };
+
+  const state = {
+    selectedPeriod: "",
+    observer: null,
+    refreshTimer: 0,
+    mutationTimer: 0,
+    requestId: 0,
+    tokenSource: "none",
+    abortController: null,
+    charts: [],
+    chartResizeObserver: null,
+    lastPanelData: null,
+  };
+
+  function injectStyles() {
+    if (document.getElementById(STYLE_ID)) return;
+
+    const style = document.createElement("style");
+    style.id = STYLE_ID;
+    style.textContent = `
+      .dsapi-plus-panel {
+        --dsapi-plus-text: rgb(var(--ds-rgb-label-1, 2 14 54));
+        --dsapi-plus-muted: rgb(var(--ds-rgb-label-2, 87 97 135));
+        box-sizing: border-box;
+        width: 100%;
+        margin: 0 0 42px;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: var(--dsapi-plus-text);
+        font-family: inherit;
+      }
+      .dsapi-plus-page-wide .b7e4e307,
+      .dsapi-plus-page-wide main > div {
+        max-width: none !important;
+      }
+      .dsapi-plus-page-wide ._6660b4d {
+        padding-left: clamp(20px, 3vw, 44px) !important;
+        padding-right: clamp(20px, 3vw, 44px) !important;
+      }
+      .dsapi-plus-head,
+      .dsapi-plus-summary,
+      .dsapi-plus-section-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+      }
+      .dsapi-plus-title {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        min-width: 0;
+      }
+      .dsapi-plus-title strong {
+        font-size: 16px;
+        line-height: 16px;
+        font-weight: var(--ds-font-weight-strong, 600);
+      }
+      .dsapi-plus-subtitle {
+        color: var(--dsapi-plus-muted);
+        font-size: 12px;
+        line-height: 18px;
+      }
+      .dsapi-plus-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-shrink: 0;
+      }
+      .dsapi-plus-head {
+        margin-bottom: 0;
+      }
+      .dsapi-plus-status {
+        color: var(--dsapi-plus-muted);
+        font-size: 12px;
+        line-height: 18px;
+        white-space: nowrap;
+      }
+      .dsapi-plus-refresh {
+        appearance: none;
+        border: 0;
+        border-radius: 6px;
+        background: rgba(2, 14, 54, 0.05);
+        color: var(--dsapi-plus-text);
+        cursor: pointer;
+        font: inherit;
+        font-size: 12px;
+        line-height: 18px;
+        padding: 5px 10px;
+      }
+      .dsapi-plus-refresh:hover {
+        background: rgba(2, 14, 54, 0.08);
+      }
+      .dsapi-plus-debug {
+        appearance: none;
+        border: 0;
+        background: transparent;
+        color: var(--dsapi-plus-muted);
+        cursor: pointer;
+        font: inherit;
+        font-size: 12px;
+        line-height: 18px;
+        padding: 5px 0;
+      }
+      .dsapi-plus-debug:hover {
+        color: var(--dsapi-plus-text);
+      }
+      .dsapi-plus-body {
+        margin-top: 21px;
+      }
+      .dsapi-plus-summary {
+        align-items: flex-start;
+        justify-content: flex-start;
+        flex-wrap: wrap;
+        margin-bottom: 32px;
+      }
+      .dsapi-plus-summary-item {
+        min-width: 0;
+        margin-right: 28px;
+      }
+      .dsapi-plus-summary-label {
+        color: var(--dsapi-plus-muted);
+        font-size: 12px;
+        line-height: 18px;
+      }
+      .dsapi-plus-summary-value {
+        margin-top: 5px;
+        font-size: 16px;
+        font-weight: var(--ds-font-weight-strong, 600);
+        line-height: 22px;
+        font-variant-numeric: tabular-nums;
+        overflow-wrap: anywhere;
+      }
+      .dsapi-plus-summary-unit {
+        color: var(--dsapi-plus-muted);
+        font-size: 12px;
+        font-weight: 400;
+        line-height: 18px;
+        margin-left: 4px;
+      }
+      .dsapi-plus-summary-detail {
+        color: var(--dsapi-plus-muted);
+        font-size: 12px;
+        font-weight: 400;
+        line-height: 18px;
+        margin-top: 2px;
+      }
+      .dsapi-plus-section {
+        margin-top: 18px;
+      }
+      .dsapi-plus-section-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: flex-start;
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+      .dsapi-plus-section-title {
+        font-size: 14px;
+        font-weight: 650;
+        line-height: 20px;
+      }
+      .dsapi-plus-section-meta {
+        color: var(--dsapi-plus-muted);
+        font-size: 12px;
+        line-height: 18px;
+      }
+      .dsapi-plus-chart-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 42px 64px;
+      }
+      .dsapi-plus-chart-block {
+        min-width: 0;
+      }
+      .dsapi-plus-chart-heading {
+        display: flex;
+        align-items: baseline;
+        gap: 12px;
+        margin-bottom: 18px;
+      }
+      .dsapi-plus-chart-heading-title {
+        font-size: var(--ds-font-size-sp, 14px);
+        line-height: var(--ds-line-height-sp, 18px);
+        font-weight: 400;
+      }
+      .dsapi-plus-chart-heading-value {
+        color: var(--dsapi-plus-muted);
+        font-size: var(--ds-font-size-sp, 14px);
+        line-height: var(--ds-line-height-sp, 18px);
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+      .dsapi-plus-chart-frame {
+        height: 160px;
+        position: relative;
+      }
+      .dsapi-plus-chart {
+        width: 100%;
+        height: 160px;
+      }
+      .dsapi-plus-table-wrap {
+        overflow-x: auto;
+        border: 0;
+        border-radius: 0;
+      }
+      .dsapi-plus-table {
+        width: 100%;
+        min-width: 620px;
+        border-collapse: collapse;
+        font-size: 12px;
+        line-height: 18px;
+      }
+      .dsapi-plus-table th,
+      .dsapi-plus-table td {
+        padding: 9px 10px;
+        border-bottom: 1px solid rgba(2, 14, 54, 0.07);
+        text-align: right;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+      }
+      .dsapi-plus-table th:first-child,
+      .dsapi-plus-table td:first-child {
+        max-width: 230px;
+        text-align: left;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .dsapi-plus-table th {
+        color: var(--dsapi-plus-muted);
+        background: rgba(2, 14, 54, 0.035);
+        font-weight: 600;
+      }
+      .dsapi-plus-table tr:last-child td {
+        border-bottom: 0;
+      }
+      .dsapi-plus-message {
+        border: 1px dashed rgba(2, 14, 54, 0.14);
+        border-radius: 8px;
+        color: var(--dsapi-plus-muted);
+        font-size: 13px;
+        line-height: 20px;
+        padding: 16px;
+      }
+      .dsapi-plus-detail-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(300px, 28%);
+        gap: 20px;
+        align-items: start;
+      }
+      .dsapi-plus-model-donut {
+        min-width: 0;
+      }
+      .dsapi-plus-model-donut .dsapi-plus-chart-heading {
+        margin-bottom: 6px;
+      }
+      .dsapi-plus-model-donut .dsapi-plus-chart-frame {
+        height: 136px;
+      }
+      .dsapi-plus-model-donut .dsapi-plus-chart {
+        height: 136px;
+      }
+      .dsapi-plus-error {
+        border-color: rgba(214, 69, 65, 0.28);
+        color: rgb(170, 49, 45);
+        background: rgba(214, 69, 65, 0.04);
+      }
+      body.dark .dsapi-plus-table th,
+      body.dark .dsapi-plus-table td {
+        border-bottom-color: rgba(255, 255, 255, 0.08);
+      }
+      body.dark .dsapi-plus-table th {
+        background: rgba(255, 255, 255, 0.06);
+      }
+      @media (max-width: 920px) {
+        .dsapi-plus-chart-grid {
+          grid-template-columns: 1fr;
+          gap: 32px;
+        }
+        .dsapi-plus-detail-layout {
+          grid-template-columns: 1fr;
+        }
+      }
+      @media (max-width: 560px) {
+        .dsapi-plus-head,
+        .dsapi-plus-section-head {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function formatInteger(value) {
+    const number = Number(value || 0);
+    if (!Number.isFinite(number)) return "0";
+    return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 0 }).format(number);
+  }
+
+  function formatDecimal(value, digits = 4) {
+    const number = Number(value || 0);
+    if (!Number.isFinite(number)) return "0";
+    return new Intl.NumberFormat("zh-CN", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: digits,
+    }).format(number);
+  }
+
+  function formatPercent(value) {
+    const number = Number(value || 0);
+    if (!Number.isFinite(number)) return "0%";
+    return `${formatDecimal(number * 100, 2)}%`;
+  }
+
+  function formatMoney(item) {
+    if (!item) return "0";
+    const currency = item.currency || "";
+    const symbol = currency === "CNY" ? "¥" : currency === "USD" ? "$" : "";
+    return `${symbol}${formatDecimal(item.amount ?? item.balance ?? 0, 6)}${currency ? ` ${currency}` : ""}`;
+  }
+
+  function formatCnyAmount(value, digits = 4) {
+    return `¥${formatDecimal(value, digits)} CNY`;
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function getBizData(json) {
+    const unwrapped = unwrapApiPayload(json);
+    return parseMaybeJson(unwrapped);
+  }
+
+  function unwrapApiPayload(value) {
+    let current = parseMaybeJson(value);
+    const seen = new Set();
+
+    for (let i = 0; i < 8; i += 1) {
+      current = parseMaybeJson(current);
+      if (!current || typeof current !== "object" || seen.has(current)) return current;
+      seen.add(current);
+
+      if (Object.prototype.hasOwnProperty.call(current, "biz_data")) {
+        current = current.biz_data;
+        continue;
+      }
+      if (Object.prototype.hasOwnProperty.call(current, "bizData")) {
+        current = current.bizData;
+        continue;
+      }
+      if (Object.prototype.hasOwnProperty.call(current, "data")) {
+        const data = parseMaybeJson(current.data);
+        if (data && typeof data === "object") {
+          current = data;
+          continue;
+        }
+      }
+      if (Object.prototype.hasOwnProperty.call(current, "result")) {
+        current = current.result;
+        continue;
+      }
+      if (Object.prototype.hasOwnProperty.call(current, "payload")) {
+        current = current.payload;
+        continue;
+      }
+
+      return current;
+    }
+
+    return current;
+  }
+
+  function parseMaybeJson(value) {
+    if (typeof value !== "string") return value;
+    const trimmed = value.trim();
+    if (!trimmed || !/^[{[]/.test(trimmed)) return value;
+    try {
+      return JSON.parse(trimmed);
+    } catch (error) {
+      return value;
+    }
+  }
+
+  async function fetchJson(path, signal) {
+    const { token, source } = getStoredAuthToken();
+    state.tokenSource = source;
+    const headers = { accept: "application/json, text/plain, */*" };
+    const appVersion = document.querySelector('meta[name="commit-id"]')?.content;
+
+    if (appVersion) headers["X-App-Version"] = appVersion;
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    const response = await fetch(path, {
+      credentials: "include",
+      headers,
+      signal,
+    });
+
+    let json = null;
+    try {
+      json = await response.json();
+    } catch (error) {
+      throw new Error(`接口返回不是 JSON：${path}`);
+    }
+
+    if (!response.ok) {
+      const message = json?.message || json?.msg || response.statusText || "请求失败";
+      throw new Error(`${response.status} ${message}`);
+    }
+
+    const businessCode = json?.code ?? json?.status_code ?? json?.status;
+    if (
+      businessCode != null &&
+      ![0, 200, "0", "200", "success", "SUCCESS", true].includes(businessCode)
+    ) {
+      const message = json?.message || json?.msg || json?.error_msg || "业务接口返回失败";
+      throw new Error(`${businessCode} ${message}`);
+    }
+
+    return json;
+  }
+
+  function getStoredAuthToken() {
+    const candidates = [];
+
+    collectTokenCandidates(candidates, "localStorage", window.localStorage);
+    collectTokenCandidates(candidates, "sessionStorage", window.sessionStorage);
+
+    candidates.sort((a, b) => b.score - a.score || b.token.length - a.token.length);
+    const best = candidates[0];
+    return best ? { token: best.token, source: best.source } : { token: "", source: "none" };
+  }
+
+  function collectTokenCandidates(candidates, storageName, storage) {
+    if (!storage) return;
+
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+      if (!key) continue;
+
+      let raw = "";
+      try {
+        raw = storage.getItem(key) || "";
+      } catch (error) {
+        continue;
+      }
+
+      const loweredKey = key.toLowerCase();
+      if (!loweredKey.includes("token") && loweredKey !== "usertoken") continue;
+      if (/(hcaptcha|captcha|turnstile|apdid|csrf|xsrf|apple|google)/i.test(key)) continue;
+
+      const parsed = parseMaybeJson(raw);
+      const exactKeyScore = loweredKey === "usertoken" ? 100 : 0;
+      findTokenStrings(parsed, `${storageName}.${key}`, exactKeyScore, candidates);
+    }
+  }
+
+  function findTokenStrings(value, source, baseScore, candidates, depth = 0) {
+    if (depth > 6 || value == null) return;
+
+    if (typeof value === "string") {
+      const token = normalizeTokenString(value);
+      if (looksLikeAuthToken(token)) {
+        candidates.push({ token, source, score: baseScore + scoreTokenSource(source, token) });
+      }
+      return;
+    }
+
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => findTokenStrings(item, `${source}[${index}]`, baseScore, candidates, depth + 1));
+      return;
+    }
+
+    if (typeof value === "object") {
+      for (const [key, child] of Object.entries(value)) {
+        const keyScore = /^(token|userToken|access_token|accessToken)$/i.test(key) ? 80 : 0;
+        findTokenStrings(child, `${source}.${key}`, baseScore + keyScore, candidates, depth + 1);
+      }
+    }
+  }
+
+  function normalizeTokenString(value) {
+    return String(value || "")
+      .trim()
+      .replace(/^Bearer\s+/i, "")
+      .replace(/^"|"$/g, "");
+  }
+
+  function looksLikeAuthToken(value) {
+    if (!value || value === "null" || value === "undefined") return false;
+    if (value.length < 16 || value.length > 4096) return false;
+    if (/\s/.test(value)) return false;
+    return /^[A-Za-z0-9._~+/=-]+$/.test(value);
+  }
+
+  function scoreTokenSource(source, token) {
+    let score = 0;
+    if (/userToken/i.test(source)) score += 80;
+    if (/access[_-]?token|token$/i.test(source)) score += 40;
+    if (/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token)) score += 20;
+    return score;
+  }
+
+  async function loadData(period, signal) {
+    const { year, month } = parsePeriod(period);
+    const query = `year=${encodeURIComponent(year)}&month=${encodeURIComponent(month)}`;
+    const [summaryJson, amountJson, costJson] = await Promise.all([
+      fetchJson("/api/v0/users/get_user_summary", signal),
+      fetchJson(`/api/v0/usage/amount?${query}`, signal),
+      fetchJson(`/api/v0/usage/cost?${query}`, signal),
+    ]);
+
+    return {
+      period: `${year}-${month}`,
+      summary: normalizeSummary(getBizData(summaryJson)),
+      amount: normalizeAmount(getBizData(amountJson)),
+      cost: normalizeCost(getBizData(costJson)),
+      debug: {
+        auth: { tokenFound: state.tokenSource !== "none", tokenSource: state.tokenSource },
+        summary: summarizeShape(summaryJson),
+        amount: summarizeShape(amountJson),
+        cost: summarizeShape(costJson),
+      },
+    };
+  }
+
+  function parsePeriod(period) {
+    const matched = String(period || "").match(/^(\d{4})-(\d{1,2})$/);
+    if (matched) return { year: Number(matched[1]), month: Number(matched[2]) };
+
+    const now = new Date();
+    return { year: now.getUTCFullYear(), month: now.getUTCMonth() + 1 };
+  }
+
+  function getSelectedPeriod() {
+    const selects = Array.from(document.querySelectorAll("select"));
+    for (const select of selects) {
+      const value = select.value || select.selectedOptions?.[0]?.value || "";
+      if (/^\d{4}-\d{1,2}$/.test(value)) return value;
+    }
+
+    const now = new Date();
+    return `${now.getUTCFullYear()}-${now.getUTCMonth() + 1}`;
+  }
+
+  function normalizeSummary(raw) {
+    const data = findObjectWithKeys(raw, [
+      "current_token",
+      "currentToken",
+      "total_usage",
+      "totalUsage",
+      "monthly_usage",
+      "monthlyUsage",
+      "normal_wallets",
+      "normalWallets",
+    ]) || {};
+    return {
+      currentToken: firstValue(data, ["current_token", "currentToken"]) ?? 0,
+      totalUsage: firstValue(data, ["total_usage", "totalUsage"]) ?? 0,
+      monthlyUsage: firstValue(data, ["monthly_usage", "monthlyUsage"]) ?? 0,
+      totalAvailableTokenEstimation:
+        firstValue(data, ["total_available_token_estimation", "totalAvailableTokenEstimation"]) ?? 0,
+      monthlyCosts: asArray(firstValue(data, ["monthly_costs", "monthlyCosts"])),
+      normalWallets: asArray(firstValue(data, ["normal_wallets", "normalWallets"])),
+      bonusWallets: asArray(firstValue(data, ["bonus_wallets", "bonusWallets"])),
+    };
+  }
+
+  function normalizeAmount(raw) {
+    const data = findUsageDataObject(raw) || {};
+    const totals = asArray(firstValue(data, ["total", "totals", "models", "model_usage", "modelUsage"]));
+    const days = asArray(firstValue(data, ["days", "daily", "daily_usage", "dailyUsage"]));
+    const models = totals.map((item) => normalizeModelUsage(getModelName(item), getUsageList(item)));
+    const aggregate = models.reduce(
+      (sum, model) => ({
+        request: sum.request + model.request,
+        response: sum.response + model.response,
+        promptMiss: sum.promptMiss + model.promptMiss,
+        promptHit: sum.promptHit + model.promptHit,
+        tokens: sum.tokens + model.tokens,
+      }),
+      { request: 0, response: 0, promptMiss: 0, promptHit: 0, tokens: 0 }
+    );
+
+    return {
+      raw: data,
+      models,
+      days: normalizeDailyUsage(days),
+      aggregate,
+    };
+  }
+
+  function normalizeDailyUsage(days) {
+    return days.map((day, index) => {
+      const data = asArray(firstValue(day, ["data", "models", "usage", "usages"]));
+      const aggregate = data.reduce(
+        (sum, item) => {
+          const model = normalizeModelUsage(getModelName(item), getUsageList(item));
+          return {
+            request: sum.request + model.request,
+            response: sum.response + model.response,
+            promptMiss: sum.promptMiss + model.promptMiss,
+            promptHit: sum.promptHit + model.promptHit,
+            tokens: sum.tokens + model.tokens,
+          };
+        },
+        { request: 0, response: 0, promptMiss: 0, promptHit: 0, tokens: 0 }
+      );
+
+      return {
+        date: firstValue(day, ["date", "day"]) || String(index + 1),
+        models: data.map((item) => normalizeModelUsage(getModelName(item), getUsageList(item))),
+        ...aggregate,
+      };
+    });
+  }
+
+  function normalizeModelUsage(model, usage) {
+    const usageMap = usageToMap(usage);
+    const request = usageMap[TOKEN_TYPES.request] || 0;
+    const response = usageMap[TOKEN_TYPES.response] || 0;
+    const promptMiss = usageMap[TOKEN_TYPES.promptMiss] || 0;
+    const promptHit = usageMap[TOKEN_TYPES.promptHit] || 0;
+    const promptTotal = promptMiss + promptHit;
+    const tokens = response + promptMiss + promptHit;
+
+    return {
+      model: model || "unknown",
+      request,
+      response,
+      promptMiss,
+      promptHit,
+      promptTotal,
+      tokens,
+      cacheHitRate: promptTotal > 0 ? promptHit / promptTotal : 0,
+    };
+  }
+
+  function usageToMap(usage) {
+    const map = {};
+    if (!Array.isArray(usage)) return map;
+    for (const item of usage) {
+      const type = firstValue(item, ["type", "usage_type", "usageType", "name", "key"]);
+      if (!type) continue;
+      map[type] = Number(firstValue(item, ["amount", "value", "count", "total"]) || 0);
+    }
+    return map;
+  }
+
+  function normalizeCost(raw) {
+    const list = Array.isArray(raw)
+      ? raw
+      : asArray(firstValue(findUsageDataObject(raw) || raw || {}, ["cost", "costs", "currencies", "data"]));
+    return list.map((currencyBlock) => {
+      const total = asArray(firstValue(currencyBlock, ["total", "totals", "models", "model_cost", "modelCost"]));
+      const days = asArray(firstValue(currencyBlock, ["days", "daily", "daily_cost", "dailyCost"]));
+      const modelCosts = total.map((item) => {
+        const usage = getUsageList(item);
+        const usageCostMap = usageToMap(usage);
+        const amount = usage.length
+          ? usage.reduce((sum, usageItem) => sum + Number(firstValue(usageItem, ["amount", "value", "cost"]) || 0), 0)
+          : Number(firstValue(item, ["amount", "value", "cost"]) || 0);
+        return { model: getModelName(item), amount, usageCostMap };
+      });
+      const amount = modelCosts.reduce((sum, item) => sum + item.amount, 0);
+
+      return {
+        currency: firstValue(currencyBlock, ["currency", "currency_code", "currencyCode"]) || "",
+        amount,
+        modelCosts,
+        days,
+      };
+    });
+  }
+
+  function findUsageDataObject(raw) {
+    return findObjectWithKeys(raw, ["total", "totals", "days", "daily", "models", "model_usage", "modelUsage"]);
+  }
+
+  function findObjectWithKeys(value, keys) {
+    const root = parseMaybeJson(value);
+    const queue = [root];
+    const seen = new Set();
+
+    while (queue.length) {
+      const current = parseMaybeJson(queue.shift());
+      if (!current || typeof current !== "object" || seen.has(current)) continue;
+      seen.add(current);
+
+      if (!Array.isArray(current) && keys.some((key) => Object.prototype.hasOwnProperty.call(current, key))) {
+        return current;
+      }
+
+      const children = Array.isArray(current) ? current : Object.values(current);
+      for (const child of children) {
+        if (child && (typeof child === "object" || typeof child === "string")) queue.push(child);
+      }
+    }
+
+    return null;
+  }
+
+  function firstValue(object, keys) {
+    if (!object || typeof object !== "object") return undefined;
+    for (const key of keys) {
+      if (Object.prototype.hasOwnProperty.call(object, key)) return object[key];
+    }
+    return undefined;
+  }
+
+  function asArray(value) {
+    const parsed = parseMaybeJson(value);
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && typeof parsed === "object") return Object.values(parsed);
+    return [];
+  }
+
+  function getModelName(item) {
+    return firstValue(item, ["model", "model_name", "modelName", "name", "id"]) || "unknown";
+  }
+
+  function getUsageList(item) {
+    return asArray(firstValue(item, ["usage", "usages", "amounts", "values", "data"]));
+  }
+
+  function summarizeShape(value, depth = 0) {
+    const parsed = parseMaybeJson(value);
+    if (depth > 2) return "...";
+    if (Array.isArray(parsed)) {
+      return {
+        type: "array",
+        length: parsed.length,
+        first: parsed.length ? summarizeShape(parsed[0], depth + 1) : null,
+      };
+    }
+    if (!parsed || typeof parsed !== "object") return { type: typeof parsed };
+    const keys = Object.keys(parsed);
+    const result = { type: "object", keys: keys.slice(0, 20) };
+    for (const key of keys.slice(0, 6)) result[key] = summarizeShape(parsed[key], depth + 1);
+    return result;
+  }
+
+  function renderSkeleton(panel, period) {
+    if (state.charts.length > 0) {
+      const subtitle = panel.querySelector(".dsapi-plus-subtitle");
+      const status = panel.querySelector(".dsapi-plus-status");
+      if (subtitle) subtitle.textContent = `${escapeHtml(period)} UTC`;
+      if (status) status.textContent = "加载中...";
+      const banner = panel.querySelector(".dsapi-plus-error-banner");
+      if (banner) banner.remove();
+      return;
+    }
+
+    disposeCharts();
+    panel.innerHTML = `
+      <div class="dsapi-plus-head">
+        <div class="dsapi-plus-title">
+          <strong>扩展用量</strong>
+          <span class="dsapi-plus-subtitle">${escapeHtml(period)} UTC</span>
+        </div>
+        <div class="dsapi-plus-actions">
+          <span class="dsapi-plus-status">加载中...</span>
+          <button type="button" class="dsapi-plus-debug">调试数据</button>
+          <button type="button" class="dsapi-plus-refresh">刷新</button>
+        </div>
+      </div>
+      <div class="dsapi-plus-message">正在读取 DeepSeek 用量接口。</div>
+    `;
+    bindRefresh(panel);
+  }
+
+  function errorBannerHTML(message, isAuth) {
+    return `
+      <div class="dsapi-plus-message dsapi-plus-error dsapi-plus-error-banner">
+        ${
+          isAuth
+            ? "当前脚本没有读到 DeepSeek 登录 token，或 token 已失效。请确认脚本运行在 https://platform.deepseek.com/usage 页面并已登录。"
+            : "接口读取失败。"
+        }
+        <br>${escapeHtml(message)}
+      </div>
+    `;
+  }
+
+  function renderError(panel, period, error) {
+    const message = String(error?.message || error || "未知错误");
+    const isAuth = /\b(401|403|40002)\b|missing token/i.test(message);
+    panel.__dsapiPlusDebug = {
+      auth: { tokenFound: state.tokenSource !== "none", tokenSource: state.tokenSource },
+      error: message,
+    };
+
+    if (state.charts.length > 0) {
+      const subtitle = panel.querySelector(".dsapi-plus-subtitle");
+      const status = panel.querySelector(".dsapi-plus-status");
+      if (subtitle) subtitle.textContent = `${escapeHtml(period)} UTC`;
+      if (status) status.textContent = "加载失败";
+      const existing = panel.querySelector(".dsapi-plus-error-banner");
+      if (existing) existing.remove();
+      const body = panel.querySelector(".dsapi-plus-body");
+      if (body) {
+        body.insertAdjacentHTML("afterbegin", errorBannerHTML(message, isAuth));
+      }
+      return;
+    }
+
+    disposeCharts();
+    panel.innerHTML = `
+      <div class="dsapi-plus-head">
+        <div class="dsapi-plus-title">
+          <strong>扩展用量</strong>
+          <span class="dsapi-plus-subtitle">${escapeHtml(period)} UTC</span>
+        </div>
+        <div class="dsapi-plus-actions">
+          <span class="dsapi-plus-status">加载失败</span>
+          <button type="button" class="dsapi-plus-debug">调试数据</button>
+          <button type="button" class="dsapi-plus-refresh">重试</button>
+        </div>
+      </div>
+      ${errorBannerHTML(message, isAuth)}
+    `;
+    bindRefresh(panel);
+  }
+
+  function buildPanelData(data) {
+    const { period, summary, amount, cost } = data;
+    const monthlyCostText = summary.monthlyCosts.length
+      ? summary.monthlyCosts.map(formatMoney).join(" + ")
+      : "0";
+    const monthCostText = cost.length ? cost.map(formatMoney).join(" + ") : "0";
+    const sortedModels = amount.models.slice().sort((a, b) => b.tokens - a.tokens || b.request - a.request);
+    const tokenTotal = amount.aggregate.tokens;
+    const monthCnyCost = sumCurrencyAmount(cost, "CNY", "amount");
+    const monthlyCnyCost = sumCurrencyAmount(summary.monthlyCosts, "CNY", "amount");
+    const cnyCostBreakdown = getCostBreakdown(cost, "CNY");
+    const walletCnyBalance =
+      sumCurrencyAmount(summary.normalWallets, "CNY", "balance") +
+      sumCurrencyAmount(summary.bonusWallets, "CNY", "balance");
+    const averageCostPerMillion = computeAverageCostPerMillion({
+      preferredCost: monthCnyCost,
+      preferredTokens: tokenTotal,
+      fallbackCost: monthlyCnyCost,
+      fallbackTokens: Number(summary.monthlyUsage || 0),
+    });
+    const averageInputCostPerMillion = computeAverageCostPerMillion({
+      preferredCost: cnyCostBreakdown.input,
+      preferredTokens: amount.aggregate.promptMiss + amount.aggregate.promptHit,
+      fallbackCost: monthCnyCost || monthlyCnyCost,
+      fallbackTokens: tokenTotal || Number(summary.monthlyUsage || 0),
+    });
+    const averageOutputCostPerMillion = computeAverageCostPerMillion({
+      preferredCost: cnyCostBreakdown.output,
+      preferredTokens: amount.aggregate.response,
+      fallbackCost: monthCnyCost || monthlyCnyCost,
+      fallbackTokens: tokenTotal || Number(summary.monthlyUsage || 0),
+    });
+    const estimatedAvailableTokens = averageCostPerMillion > 0
+      ? Math.floor(walletCnyBalance / averageCostPerMillion * 1000000)
+      : 0;
+    const averageCostDetail = `输入 ${formatCnyAmount(averageInputCostPerMillion)} /1M · 输出 ${formatCnyAmount(averageOutputCostPerMillion)} /1M`;
+
+    const daysArr = amount.days;
+    const now = new Date();
+    const todayDay = now.getUTCDate();
+    let today = null;
+    for (const day of daysArr) {
+      const match = String(day.date || "").match(/(\d{1,2})$/);
+      if (match && Number(match[1]) === todayDay) {
+        today = day;
+        break;
+      }
+    }
+    if (!today) {
+      for (let i = daysArr.length - 1; i >= 0; i--) {
+        if (daysArr[i].tokens > 0 || daysArr[i].request > 0) {
+          today = daysArr[i];
+          break;
+        }
+      }
+      if (!today) today = daysArr.length ? daysArr[daysArr.length - 1] : null;
+    }
+    const todayInputTokens = today ? (today.promptMiss || 0) + (today.promptHit || 0) : 0;
+    const todayOutputTokens = today ? (today.response || 0) : 0;
+    const todayInputCost = averageInputCostPerMillion > 0 ? averageInputCostPerMillion * todayInputTokens / 1000000 : 0;
+    const todayOutputCost = averageOutputCostPerMillion > 0 ? averageOutputCostPerMillion * todayOutputTokens / 1000000 : 0;
+    const todayTotalCost = todayInputCost + todayOutputCost;
+    const todayCostText = formatCnyAmount(todayTotalCost);
+    const todayCostDetail = `输入 ${formatCnyAmount(todayInputCost)} · 输出 ${formatCnyAmount(todayOutputCost)}`;
+    const costDetail = `输入 ${formatCnyAmount(cnyCostBreakdown.input)} · 输出 ${formatCnyAmount(cnyCostBreakdown.output)}`;
+    const usageInput = amount.aggregate.promptMiss + amount.aggregate.promptHit;
+    const usageDetail = `输入 ${formatInteger(usageInput)} tokens · 输出 ${formatInteger(amount.aggregate.response)} tokens`;
+
+    const updateTime = new Date().toLocaleTimeString("zh-CN");
+
+    const html = `
+      <div class="dsapi-plus-head">
+        <div class="dsapi-plus-title">
+          <strong>扩展用量</strong>
+          <span class="dsapi-plus-subtitle">${escapeHtml(period)} UTC，数据可能有约 5 分钟延迟</span>
+        </div>
+        <div class="dsapi-plus-actions">
+          <span class="dsapi-plus-status">已更新 ${escapeHtml(updateTime)}</span>
+          <button type="button" class="dsapi-plus-debug">调试数据</button>
+          <button type="button" class="dsapi-plus-refresh">刷新</button>
+        </div>
+      </div>
+
+      <div class="dsapi-plus-body">
+        <div class="dsapi-plus-summary">
+          ${summaryItem("今日消费", todayCostText, "", todayCostDetail)}
+          ${summaryItem("本月费用", monthlyCostText, "", costDetail)}
+          ${summaryItem("选中月份费用", monthCostText, "", costDetail)}
+          ${summaryItem("平均消费", formatCnyAmount(averageCostPerMillion), "/1M", averageCostDetail)}
+          ${summaryItem("本月用量", formatInteger(summary.monthlyUsage), "Tokens", usageDetail)}
+          ${summaryItem("预估可用", estimatedAvailableTokens ? formatInteger(estimatedAvailableTokens) : "无法估算", estimatedAvailableTokens ? "Tokens" : "")}
+        </div>
+
+        <div class="dsapi-plus-chart-grid">
+          <div class="dsapi-plus-chart-block">
+            ${chartHeading("API 请求次数汇总", formatInteger(amount.aggregate.request))}
+            <div class="dsapi-plus-chart-frame">
+              <div class="dsapi-plus-chart" data-dsapi-chart="requests"></div>
+            </div>
+          </div>
+
+          <div class="dsapi-plus-chart-block">
+            ${chartHeading("Tokens 汇总", formatInteger(tokenTotal))}
+            <div class="dsapi-plus-chart-frame">
+              <div class="dsapi-plus-chart" data-dsapi-chart="tokens"></div>
+            </div>
+          </div>
+
+          <div class="dsapi-plus-chart-block">
+            ${chartHeading("缓存命中率", formatPercent(cacheHitRate(amount.aggregate)))}
+            <div class="dsapi-plus-chart-frame">
+              <div class="dsapi-plus-chart" data-dsapi-chart="cacheRate"></div>
+            </div>
+          </div>
+
+          <div class="dsapi-plus-chart-block">
+            ${chartHeading("Token 构成", `缓存命中 ${formatPercent(cacheHitRate(amount.aggregate))}`)}
+            <div class="dsapi-plus-chart-frame">
+              <div class="dsapi-plus-chart" data-dsapi-chart="composition"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="dsapi-plus-section">
+          <div class="dsapi-plus-section-head">
+            <div class="dsapi-plus-section-title">模型明细</div>
+          </div>
+          <div class="dsapi-plus-detail-layout">
+            <div>
+              ${
+                sortedModels.length
+                  ? renderModelTable(sortedModels, cost)
+                  : '<div class="dsapi-plus-message">当前月份暂无请求或 Token 用量。</div>'
+              }
+            </div>
+            <div class="dsapi-plus-model-donut">
+              ${chartHeading("模型分布", sortedModels.length ? `${sortedModels.length} 个活跃模型` : "暂无模型用量")}
+              <div class="dsapi-plus-chart-frame">
+                ${sortedModels.length ? '<div class="dsapi-plus-chart" data-dsapi-chart="models"></div>' : '<div class="dsapi-plus-message">当前月份暂无模型用量。</div>'}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    return {
+      period,
+      summary,
+      amount,
+      cost,
+      monthlyCostText,
+      monthCostText,
+      todayCostText,
+      todayCostDetail,
+      costDetail,
+      usageDetail,
+      sortedModels,
+      tokenTotal,
+      averageCostPerMillion,
+      averageCostDetail,
+      estimatedAvailableTokens,
+      updateTime,
+      html,
+    };
+  }
+
+  function renderPanel(panel, data) {
+    const panelData = buildPanelData(data);
+    panel.__dsapiPlusDebug = data.debug;
+    state.lastPanelData = panelData;
+    const expectedChartCount = panelData.sortedModels.length ? 5 : 4;
+
+    if (state.charts.length > 0 && state.charts.length === expectedChartCount) {
+      updatePanelIncremental(panel, panelData);
+      updateChartsData(panelData);
+      return;
+    }
+
+    disposeCharts();
+    panel.innerHTML = panelData.html;
+    bindRefresh(panel);
+    initCharts(panel, panelData);
+  }
+
+  function formatWallet(item) {
+    const tokenEstimation = item && item.token_estimation != null
+      ? `，约 ${formatInteger(item.token_estimation)} Tokens`
+      : "";
+    return `${formatMoney(item)}${tokenEstimation}`;
+  }
+
+  function summaryItem(label, value, unit = "", detail = "") {
+    return `
+      <div class="dsapi-plus-summary-item">
+        <div class="dsapi-plus-summary-label">${escapeHtml(label)}</div>
+        <div class="dsapi-plus-summary-value">${escapeHtml(value)}${unit ? `<span class="dsapi-plus-summary-unit">${escapeHtml(unit)}</span>` : ""}</div>
+        ${detail ? `<div class="dsapi-plus-summary-detail">${escapeHtml(detail)}</div>` : ""}
+      </div>
+    `;
+  }
+
+  function sumCurrencyAmount(items, currency, amountKey) {
+    return asArray(items)
+      .filter((item) => item && item.currency === currency)
+      .reduce((sum, item) => sum + Number(item[amountKey] || 0), 0);
+  }
+
+  function computeAverageCostPerMillion(input) {
+    const preferredCost = Number(input.preferredCost || 0);
+    const preferredTokens = Number(input.preferredTokens || 0);
+    if (preferredCost > 0 && preferredTokens > 0) return preferredCost / preferredTokens * 1000000;
+
+    const fallbackCost = Number(input.fallbackCost || 0);
+    const fallbackTokens = Number(input.fallbackTokens || 0);
+    if (fallbackCost > 0 && fallbackTokens > 0) return fallbackCost / fallbackTokens * 1000000;
+
+    return 0;
+  }
+
+  function getCostBreakdown(costBlocks, currency) {
+    const outputTypes = new Set([TOKEN_TYPES.response]);
+    const inputTypes = new Set([TOKEN_TYPES.promptMiss, TOKEN_TYPES.promptHit]);
+    const result = { input: 0, output: 0 };
+
+    for (const block of costBlocks) {
+      if (!block || block.currency !== currency) continue;
+      for (const modelCost of block.modelCosts || []) {
+        for (const [type, amount] of Object.entries(modelCost.usageCostMap || {})) {
+          if (outputTypes.has(type)) result.output += Number(amount || 0);
+          if (inputTypes.has(type)) result.input += Number(amount || 0);
+        }
+      }
+    }
+
+    return result;
+  }
+
+  function chartHeading(title, value) {
+    return `
+      <div class="dsapi-plus-chart-heading">
+        <span class="dsapi-plus-chart-heading-title">${escapeHtml(title)}</span>
+        <span class="dsapi-plus-chart-heading-value">${escapeHtml(value)}</span>
+      </div>
+    `;
+  }
+
+  function cacheHitRate(aggregate) {
+    const promptTotal = aggregate.promptMiss + aggregate.promptHit;
+    return promptTotal > 0 ? aggregate.promptHit / promptTotal : 0;
+  }
+
+  function renderModelTable(models, costBlocks) {
+    const rows = models
+      .map((model) => {
+        const costText = costForModel(costBlocks, model.model);
+        return `
+          <tr>
+            <td title="${escapeHtml(model.model)}">${escapeHtml(model.model)}</td>
+            <td>${formatInteger(model.request)}</td>
+            <td>${formatInteger(model.tokens)}</td>
+            <td>${formatInteger(model.response)}</td>
+            <td>${formatInteger(model.promptMiss)}</td>
+            <td>${formatInteger(model.promptHit)}</td>
+            <td>${formatPercent(model.cacheHitRate)}</td>
+            <td>${escapeHtml(costText)}</td>
+          </tr>
+        `;
+      })
+      .join("");
+
+    return `
+      <div class="dsapi-plus-table-wrap">
+        <table class="dsapi-plus-table">
+          <thead>
+            <tr>
+              <th>模型</th>
+              <th>请求数</th>
+              <th>Tokens</th>
+              <th>输出</th>
+              <th>输入未缓存</th>
+              <th>输入缓存命中</th>
+              <th>缓存命中占比</th>
+              <th>费用</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function compactNumber(value) {
+    const number = Number(value || 0);
+    if (number >= 100000000) return `${formatDecimal(number / 100000000, 1)}亿`;
+    if (number >= 10000) return `${formatDecimal(number / 10000, 1)}万`;
+    return formatInteger(number);
+  }
+
+  function shortDateLabel(value) {
+    const matched = String(value || "").match(/(\d{1,2})$/);
+    return matched ? `${matched[1]}日` : String(value || "");
+  }
+
+  function getChartTextColor() {
+    return document.body.classList.contains("dark") ? "rgba(150, 150, 150, 1)" : "rgba(2, 14, 54, 0.6)";
+  }
+
+  function getChartGridColor() {
+    return document.body.classList.contains("dark") ? "rgba(60, 60, 60, 1)" : "#D2D8E5";
+  }
+
+  function getTooltipCss() {
+    return [
+      "padding: 12px",
+      "background-color: rgb(var(--ds-rgb-elevated, 255 255 255))",
+      "border-radius: 10px",
+      "box-shadow: 0 6px 16px 0 rgba(0, 0, 0, 0.08), 0 3px 6px -4px rgba(0, 0, 0, 0.12), 0 9px 28px 8px rgba(0, 0, 0, 0.05)",
+      "border: none",
+    ].join(";") + ";";
+  }
+
+  function chartBaseOption() {
+    const textColor = getChartTextColor();
+    const gridColor = getChartGridColor();
+    return {
+      animation: false,
+      grid: { left: 44, right: 12, top: 8, bottom: 24 },
+      tooltip: {
+        confine: true,
+        trigger: "axis",
+        extraCssText: getTooltipCss(),
+        axisPointer: { lineStyle: { color: gridColor } },
+      },
+      xAxis: {
+        type: "category",
+        axisTick: { show: false },
+        axisLabel: { color: textColor, interval: "auto", formatter: shortDateLabel },
+        axisLine: { lineStyle: { color: gridColor } },
+      },
+      yAxis: {
+        type: "value",
+        splitNumber: 1,
+        splitLine: { lineStyle: { color: gridColor } },
+        axisLabel: { color: textColor, align: "left", margin: 34, formatter: compactNumber },
+      },
+    };
+  }
+
+  function getEcharts() {
+    return Promise.resolve(window.echarts);
+  }
+
+  function disposeCharts() {
+    if (state.chartResizeObserver) {
+      state.chartResizeObserver.disconnect();
+      state.chartResizeObserver = null;
+    }
+    for (const { instance } of state.charts) instance.dispose();
+    state.charts = [];
+  }
+
+  function buildChartOption(key, panelData) {
+    const { amount, sortedModels } = panelData;
+    switch (key) {
+      case "requests": return buildRequestChartOption(amount.days);
+      case "tokens": return buildTokensChartOption(amount.days);
+      case "cacheRate": return buildCacheRateChartOption(amount.days);
+      case "composition": return buildCompositionChartOption(amount.aggregate);
+      case "models": return buildModelsChartOption(sortedModels.slice(0, 8));
+      default: return null;
+    }
+  }
+
+  function updateChartTheme() {
+    if (!state.lastPanelData) return;
+    for (const entry of state.charts) {
+      if (entry.instance.isDisposed()) continue;
+      const option = buildChartOption(entry.key, state.lastPanelData);
+      if (option) entry.instance.setOption(option, { notMerge: true });
+    }
+  }
+
+  function startThemeObserver() {
+    new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        if (m.type === "attributes" && m.attributeName === "class") {
+          updateChartTheme();
+          break;
+        }
+      }
+    }).observe(document.body, { attributes: true, attributeFilter: ["class"] });
+  }
+
+  function updatePanelIncremental(panel, panelData) {
+    const { period, amount, summary, cost, monthlyCostText, monthCostText, todayCostText, todayCostDetail, costDetail, usageDetail, sortedModels, tokenTotal, averageCostPerMillion, averageCostDetail, estimatedAvailableTokens, updateTime } = panelData;
+
+    const subtitle = panel.querySelector(".dsapi-plus-subtitle");
+    const status = panel.querySelector(".dsapi-plus-status");
+    if (subtitle) subtitle.textContent = `${escapeHtml(period)} UTC，数据可能有约 5 分钟延迟`;
+    if (status) status.textContent = `已更新 ${escapeHtml(updateTime)}`;
+
+    const summaryEl = panel.querySelector(".dsapi-plus-summary");
+    if (summaryEl) {
+      summaryEl.innerHTML =
+        summaryItem("今日消费", todayCostText, "", todayCostDetail) +
+        summaryItem("本月费用", monthlyCostText, "", costDetail) +
+        summaryItem("选中月份费用", monthCostText, "", costDetail) +
+        summaryItem("平均消费", formatCnyAmount(averageCostPerMillion), "/1M", averageCostDetail) +
+        summaryItem("本月用量", formatInteger(summary.monthlyUsage), "Tokens", usageDetail) +
+        summaryItem("预估可用", estimatedAvailableTokens ? formatInteger(estimatedAvailableTokens) : "无法估算", estimatedAvailableTokens ? "Tokens" : "");
+    }
+
+    const headingValues = panel.querySelectorAll(".dsapi-plus-chart-heading-value");
+    const headingTexts = [
+      formatInteger(amount.aggregate.request),
+      formatInteger(tokenTotal),
+      formatPercent(cacheHitRate(amount.aggregate)),
+      `缓存命中 ${formatPercent(cacheHitRate(amount.aggregate))}`,
+      sortedModels.length ? `${sortedModels.length} 个活跃模型` : "暂无模型用量",
+    ];
+    headingValues.forEach((el, i) => {
+      if (headingTexts[i] != null) el.textContent = headingTexts[i];
+    });
+
+    const detailLayout = panel.querySelector(".dsapi-plus-detail-layout");
+    if (detailLayout && detailLayout.children[0]) {
+      detailLayout.children[0].innerHTML = sortedModels.length
+        ? renderModelTable(sortedModels, cost)
+        : '<div class="dsapi-plus-message">当前月份暂无请求或 Token 用量。</div>';
+    }
+
+    const donut = panel.querySelector(".dsapi-plus-model-donut");
+    if (donut) {
+      const frame = donut.querySelector(".dsapi-plus-chart-frame");
+      if (frame) {
+        const hasChart = !!frame.querySelector('[data-dsapi-chart="models"]');
+        if (sortedModels.length && !hasChart) {
+          frame.innerHTML = '<div class="dsapi-plus-chart" data-dsapi-chart="models"></div>';
+        } else if (!sortedModels.length && hasChart) {
+          frame.innerHTML = '<div class="dsapi-plus-message">当前月份暂无模型用量。</div>';
+        }
+      }
+    }
+  }
+
+  function updateChartsData(panelData) {
+    const remaining = [];
+    for (const entry of state.charts) {
+      const option = buildChartOption(entry.key, panelData);
+      if (!option || entry.instance.isDisposed()) {
+        entry.instance.dispose();
+        continue;
+      }
+      entry.instance.setOption(option, { notMerge: true });
+      remaining.push(entry);
+    }
+    state.charts = remaining;
+  }
+
+  function initCharts(panel, panelData) {
+    getEcharts()
+      .then((echarts) => {
+        if (!panel.isConnected) return;
+
+        const keys = ["requests", "tokens", "cacheRate", "composition", "models"];
+        for (const key of keys) {
+          const container = panel.querySelector(`[data-dsapi-chart="${key}"]`);
+          const option = buildChartOption(key, panelData);
+          if (!container || !option) continue;
+          const instance = echarts.init(container, null, { renderer: "svg" });
+          instance.setOption(option);
+          state.charts.push({ key, instance });
+        }
+
+        state.chartResizeObserver = new ResizeObserver(() => {
+          for (const { instance } of state.charts) instance.resize();
+        });
+        state.chartResizeObserver.observe(panel);
+      })
+      .catch((error) => {
+        console.error("[DeepSeek Usage Panel Plus] ECharts init failed", error);
+      });
+  }
+
+  function buildRequestChartOption(days) {
+    const option = chartBaseOption();
+    const x = days.map((day) => day.date);
+    option.xAxis.data = x;
+    option.tooltip.formatter = (params) => {
+      const item = params[0];
+      const day = days[item.dataIndex] || {};
+      const modelRows = (day.models || [])
+        .filter((model) => model.request > 0)
+        .sort((a, b) => b.request - a.request)
+        .map((model, index) => ({
+          color: chartPalette(index),
+          label: model.model,
+          value: formatInteger(model.request),
+        }));
+      return tooltipHtml(item.axisValue, modelRows.length ? modelRows : [
+        { color: "#0C70F3", label: "API 请求次数汇总", value: formatInteger(item.value) },
+      ]);
+    };
+    option.series = [
+      {
+        data: days.map((day) => day.request),
+        type: "line",
+        smooth: true,
+        showSymbol: false,
+        itemStyle: { color: "#0C70F3" },
+        lineStyle: { color: "#0C70F3", width: 1.5 },
+        areaStyle: { color: "rgba(112, 178, 254, 0.7)" },
+        emphasis: { disabled: true },
+      },
+    ];
+    return option;
+  }
+
+  function buildCacheRateChartOption(days) {
+    const option = chartBaseOption();
+    option.xAxis.data = days.map((day) => day.date);
+    option.yAxis.axisLabel.formatter = (value) => `${formatDecimal(value * 100, 0)}%`;
+    option.yAxis.max = 1;
+    option.tooltip.formatter = (params) => {
+      const item = params[0];
+      const day = days[item.dataIndex] || {};
+      return tooltipHtml(item.axisValue, [
+        { color: "#0C70F3", label: "缓存命中率", value: formatPercent(item.value) },
+        { color: "#60B3FE", label: "缓存命中 Tokens", value: formatInteger(day.promptHit || 0) },
+        { color: "#A0DCFD", label: "输入 Tokens", value: formatInteger((day.promptHit || 0) + (day.promptMiss || 0)) },
+      ]);
+    };
+    option.series = [
+      {
+        data: days.map((day) => {
+          const total = day.promptHit + day.promptMiss;
+          return total > 0 ? day.promptHit / total : 0;
+        }),
+        type: "line",
+        smooth: true,
+        showSymbol: false,
+        itemStyle: { color: "#0C70F3" },
+        lineStyle: { color: "#0C70F3", width: 1.5 },
+        areaStyle: { color: "rgba(112, 178, 254, 0.7)" },
+        emphasis: { disabled: true },
+      },
+    ];
+    return option;
+  }
+
+  function buildTokensChartOption(days) {
+    const option = chartBaseOption();
+    option.xAxis.data = days.map((day) => day.date);
+    option.tooltip.formatter = (params) => {
+      const rows = params
+        .slice()
+        .reverse()
+        .map((item) => ({ color: item.color, label: item.seriesName, value: `${formatInteger(item.value)} tokens` }));
+      return tooltipHtml(params[0]?.axisValue || "", rows);
+    };
+    option.series = [
+      tokenBarSeries("输出 Tokens", days.map((day) => day.response), "#0C70F3"),
+      tokenBarSeries("输入未缓存", days.map((day) => day.promptMiss), "#60B3FE"),
+      tokenBarSeries("输入缓存命中", days.map((day) => day.promptHit), "#A0DCFD"),
+    ];
+    return option;
+  }
+
+  function tokenBarSeries(name, data, color) {
+    return {
+      name,
+      data,
+      type: "bar",
+      stack: "tokens",
+      barMaxWidth: 12,
+      itemStyle: { color },
+      emphasis: { disabled: true },
+    };
+  }
+
+  function buildCompositionChartOption(aggregate) {
+    return buildHorizontalBarOption([
+      { name: "输出 Tokens", value: aggregate.response, color: "#0C70F3" },
+      { name: "输入未缓存", value: aggregate.promptMiss, color: "#60B3FE" },
+      { name: "输入缓存命中", value: aggregate.promptHit, color: "#A0DCFD" },
+    ]);
+  }
+
+  function buildModelsChartOption(models) {
+    if (!models.length) return null;
+    const textColor = getChartTextColor();
+    return {
+      animation: false,
+      tooltip: {
+        confine: true,
+        trigger: "item",
+        extraCssText: getTooltipCss(),
+        formatter: (params) => tooltipHtml(params.name, [
+          { color: params.color, label: "Tokens", value: formatInteger(params.value) },
+          { color: params.color, label: "占比", value: `${formatDecimal(params.percent, 2)}%` },
+        ]),
+      },
+      legend: {
+        type: "scroll",
+        orient: "vertical",
+        right: 8,
+        top: "middle",
+        width: 118,
+        height: 118,
+        itemWidth: 10,
+        itemHeight: 10,
+        textStyle: { color: textColor, fontSize: 11 },
+      },
+      series: [{
+        type: "pie",
+        radius: ["36%", "52%"],
+        center: ["38%", "44%"],
+        avoidLabelOverlap: true,
+        label: { show: false },
+        labelLine: { show: false },
+        itemStyle: { borderWidth: 2, borderColor: "rgb(var(--ds-rgb-elevated, 255 255 255))" },
+        data: models.map((model, index) => ({
+          name: model.model,
+          value: model.tokens,
+          itemStyle: { color: chartPalette(index) },
+        })),
+        emphasis: { scale: true, scaleSize: 4 },
+      }],
+    };
+  }
+
+  function buildHorizontalBarOption(items) {
+    const textColor = getChartTextColor();
+    const gridColor = getChartGridColor();
+    return {
+      animation: false,
+      grid: { left: 94, right: 56, top: 8, bottom: 8 },
+      tooltip: {
+        confine: true,
+        trigger: "axis",
+        axisPointer: { type: "shadow", shadowStyle: { color: "rgba(2,14,54,0.04)" } },
+        extraCssText: getTooltipCss(),
+        formatter: (params) => tooltipHtml(params[0]?.name || "", [
+          { color: params[0]?.color || "#0C70F3", label: "Tokens", value: formatInteger(params[0]?.value || 0) },
+        ]),
+      },
+      xAxis: {
+        type: "value",
+        splitNumber: 1,
+        splitLine: { lineStyle: { color: gridColor } },
+        axisLabel: { color: textColor, formatter: compactNumber },
+      },
+      yAxis: {
+        type: "category",
+        inverse: true,
+        data: items.map((item) => item.name),
+        axisTick: { show: false },
+        axisLine: { show: false },
+        axisLabel: {
+          color: textColor,
+          width: 86,
+          overflow: "truncate",
+        },
+      },
+      series: [{
+        type: "bar",
+        barMaxWidth: 12,
+        data: items.map((item) => ({ value: item.value, itemStyle: { color: item.color } })),
+        label: {
+          show: true,
+          position: "right",
+          color: textColor,
+          formatter: (params) => compactNumber(params.value),
+        },
+        emphasis: { disabled: true },
+      }],
+    };
+  }
+
+  function chartPalette(index) {
+    return [
+      "#0C70F3",
+      "#60B3FE",
+      "#A0DCFD",
+      "#6E8BFF",
+      "#7BCBFF",
+      "#A7B8FF",
+      "#54D2B6",
+      "#B8E7FF",
+    ][index % 8];
+  }
+
+  function tooltipHtml(title, rows) {
+    const body = rows.map((row) => `
+      <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;color:rgb(var(--ds-rgb-label-2));font-size:var(--ds-font-size-sp);line-height:var(--ds-line-height-sp);">
+        <span style="display:flex;align-items:center;gap:8px;">
+          <span style="width:12px;height:12px;border-radius:2px;background:${row.color};display:inline-block;"></span>
+          <span>${escapeHtml(row.label)}</span>
+        </span>
+        <span style="font-variant-numeric:tabular-nums;color:rgb(var(--ds-rgb-label-2));">${escapeHtml(row.value)}</span>
+      </div>
+    `).join("");
+    return `
+      <div style="display:flex;flex-direction:column;gap:8px;min-width:150px;">
+        <div style="color:rgb(var(--ds-rgb-label-1));font-weight:var(--ds-font-weight-strong);font-size:var(--ds-font-size-sp);line-height:var(--ds-line-height-sp);">${escapeHtml(title)}</div>
+        ${body}
+      </div>
+    `;
+  }
+
+  function costForModel(costBlocks, modelName) {
+    const parts = [];
+    for (const block of costBlocks) {
+      const hit = block.modelCosts.find((item) => item.model === modelName);
+      if (!hit || !hit.amount) continue;
+      parts.push(formatMoney({ currency: block.currency, amount: hit.amount }));
+    }
+    return parts.length ? parts.join(" + ") : "0";
+  }
+
+  function bindRefresh(panel) {
+    const button = panel.querySelector(".dsapi-plus-refresh");
+    if (button) button.addEventListener("click", () => refresh(true));
+
+    const debugButton = panel.querySelector(".dsapi-plus-debug");
+    if (debugButton) {
+      debugButton.addEventListener("click", () => {
+        const debug = panel.__dsapiPlusDebug || { message: "数据尚未加载完成，请先点刷新。" };
+        console.log("[DeepSeek Usage Panel Plus] API shape summary", debug);
+      });
+    }
+  }
+
+  function ensurePanel() {
+    injectStyles();
+    document.body.classList.add("dsapi-plus-page-wide");
+
+    let panel = document.getElementById(PANEL_ID);
+    const reference = findInsertionReference();
+    if (!reference) return null;
+
+    if (!panel) {
+      panel = document.createElement("section");
+      panel.id = PANEL_ID;
+      panel.className = "dsapi-plus-panel";
+    }
+
+    if (!panel.isConnected || panel.parentNode !== reference.parentNode || panel.nextSibling !== reference) {
+      reference.parentNode.insertBefore(panel, reference);
+    }
+
+    return panel;
+  }
+
+  function findInsertionReference() {
+    const monthlyTitle = findExactTextElement("每月用量");
+    if (monthlyTitle) return climbToSectionRow(monthlyTitle);
+
+    const usageTitle = findExactTextElement("用量信息");
+    if (usageTitle && usageTitle.parentElement) {
+      return usageTitle.nextElementSibling || usageTitle.parentElement.firstElementChild;
+    }
+
+    const main = document.querySelector("main");
+    return main && main.firstElementChild ? main.firstElementChild : null;
+  }
+
+  function findExactTextElement(text) {
+    const root = document.querySelector("main") || document.body;
+    const elements = Array.from(root.querySelectorAll("div, span, h1, h2, h3, [role='heading']"));
+    return elements.find((element) => {
+      if (element.id === PANEL_ID || element.closest(`#${PANEL_ID}`)) return false;
+      const value = (element.textContent || "").trim();
+      return value === text;
+    });
+  }
+
+  function climbToSectionRow(element) {
+    let node = element;
+    for (let i = 0; i < 4 && node.parentElement; i += 1) {
+      const parent = node.parentElement;
+      const text = (parent.textContent || "").trim();
+      if (text.includes("每月用量") && parent.children.length > 1) return parent;
+      node = parent;
+    }
+    return element;
+  }
+
+  async function refresh(force) {
+    const panel = ensurePanel();
+    if (!panel) return;
+
+    const period = getSelectedPeriod();
+    if (!force && state.selectedPeriod === period && ["1", "error", "loading"].includes(panel.dataset.loaded)) {
+      return;
+    }
+
+    state.selectedPeriod = period;
+    panel.dataset.loaded = "loading";
+    const requestId = ++state.requestId;
+    renderSkeleton(panel, period);
+
+    state.abortController?.abort();
+    state.abortController = new AbortController();
+    const { signal } = state.abortController;
+    const timeoutId = setTimeout(() => state.abortController.abort(), 30000);
+
+    try {
+      const data = await loadData(period, signal);
+      clearTimeout(timeoutId);
+      if (requestId !== state.requestId) return;
+      panel.dataset.loaded = "1";
+      renderPanel(panel, data);
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (requestId !== state.requestId) return;
+      if (error instanceof DOMException && error.name === "AbortError") {
+        if (state.abortController && state.abortController.signal !== signal) return;
+        panel.dataset.loaded = "error";
+        renderError(panel, period, new Error("请求超时（30 秒）"));
+        return;
+      }
+      panel.dataset.loaded = "error";
+      renderError(panel, period, error);
+      console.error("[DeepSeek Usage Panel Plus]", error);
+    }
+  }
+
+  function scheduleRefresh(force) {
+    window.clearTimeout(state.refreshTimer);
+    state.refreshTimer = window.setTimeout(() => refresh(force), 120);
+  }
+
+  function startObservers() {
+    document.addEventListener("change", (event) => {
+      const target = event.target;
+      if (target instanceof HTMLSelectElement && /^\d{4}-\d{1,2}$/.test(target.value || "")) {
+        scheduleRefresh(true);
+      }
+    });
+
+    state.observer = new MutationObserver(() => {
+      window.clearTimeout(state.mutationTimer);
+      state.mutationTimer = window.setTimeout(() => {
+        const panel = ensurePanel();
+        if (!panel) return;
+        const period = getSelectedPeriod();
+        if (period !== state.selectedPeriod || !panel.dataset.loaded) {
+          scheduleRefresh(false);
+        }
+      }, 250);
+    });
+
+    state.observer.observe(document.body, { childList: true, subtree: true });
+  }
+
+  function boot() {
+    ensurePanel();
+    startObservers();
+    startThemeObserver();
+    scheduleRefresh(true);
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", boot, { once: true });
+  } else {
+    boot();
+  }
+})();
