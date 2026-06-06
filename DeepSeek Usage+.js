@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         DeepSeek Usage+ — 官方API用量页增强仪表盘
 // @namespace    https://platform.deepseek.com/
-// @version      1.7.0
+// @version      1.7.1
 // @description  DeepSeek 官方用量页仅展示基础数字，本脚本扩展为完整仪表盘：费用细分、Token 构成、交互图表、模型明细。Turns the bare-bones official page into a full analytics dashboard.
 // @author       miaoa88
-// @match        https://platform.deepseek.com/usage*
+// @match        https://platform.deepseek.com/*
 // @run-at       document-idle
 // @grant        none
 // @require      https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js
@@ -27,13 +27,26 @@
     observer: null,
     refreshTimer: 0,
     mutationTimer: 0,
+    routeTimer: 0,
     requestId: 0,
     tokenSource: "none",
     abortController: null,
     charts: [],
     chartResizeObserver: null,
     lastPanelData: null,
+    booted: false,
+    historyHooked: false,
+    tooltipActive: false,
+    tooltipKeeperTimer: 0,
+    tooltipKeeperChart: null,
+    tooltipKeeperPoint: null,
+    pendingThemeUpdate: false,
+    pendingPanelData: null,
   };
+
+  function isUsagePage() {
+    return location.pathname === "/usage" || location.pathname.startsWith("/usage/");
+  }
 
   function injectStyles() {
     if (document.getElementById(STYLE_ID)) return;
@@ -1175,6 +1188,31 @@
     ].join(";") + ";";
   }
 
+  function getTooltipPosition(point, params, dom, rect, size) {
+    const gap = 12;
+    const width = dom?.offsetWidth || 180;
+    const height = dom?.offsetHeight || 90;
+    const viewWidth = size?.viewSize?.[0] || window.innerWidth;
+    const viewHeight = size?.viewSize?.[1] || window.innerHeight;
+    let x = point[0] + gap;
+    let y = point[1] + gap;
+    if (x + width > viewWidth) x = point[0] - width - gap;
+    if (y + height > viewHeight) y = point[1] - height - gap;
+    return [Math.max(0, x), Math.max(0, y)];
+  }
+
+  function tooltipInteractionOption() {
+    return {
+      triggerOn: "mousemove|click",
+      showDelay: 0,
+      enterable: false,
+      hideDelay: 0,
+      renderMode: "html",
+      appendToBody: true,
+      position: getTooltipPosition,
+    };
+  }
+
   function chartBaseOption() {
     const textColor = getChartTextColor();
     const gridColor = getChartGridColor();
@@ -1184,6 +1222,7 @@
       tooltip: {
         confine: true,
         trigger: "axis",
+        ...tooltipInteractionOption(),
         extraCssText: getTooltipCss(),
         axisPointer: { lineStyle: { color: gridColor } },
       },
@@ -1207,12 +1246,68 @@
   }
 
   function disposeCharts() {
+    stopTooltipKeeper();
     if (state.chartResizeObserver) {
       state.chartResizeObserver.disconnect();
       state.chartResizeObserver = null;
     }
     for (const { instance } of state.charts) instance.dispose();
     state.charts = [];
+  }
+
+  function startTooltipKeeper(instance, event) {
+    if (!instance || instance.isDisposed()) return;
+    if (state.tooltipKeeperChart !== instance && state.tooltipKeeperTimer) {
+      window.clearInterval(state.tooltipKeeperTimer);
+      state.tooltipKeeperTimer = 0;
+    }
+    for (const entry of state.charts) {
+      const chart = entry.instance;
+      if (chart !== instance && !chart.isDisposed()) {
+        chart.dispatchAction({ type: "hideTip" });
+      }
+    }
+
+    state.tooltipActive = true;
+    state.tooltipKeeperChart = instance;
+    state.tooltipKeeperPoint = [event.offsetX, event.offsetY];
+
+    instance.dispatchAction({
+      type: "showTip",
+      x: state.tooltipKeeperPoint[0],
+      y: state.tooltipKeeperPoint[1],
+    });
+
+    if (state.tooltipKeeperTimer) return;
+    state.tooltipKeeperTimer = window.setInterval(() => {
+      const chart = state.tooltipKeeperChart;
+      const point = state.tooltipKeeperPoint;
+      if (!state.tooltipActive || !chart || chart.isDisposed() || !point) {
+        stopTooltipKeeper();
+        return;
+      }
+      chart.dispatchAction({ type: "showTip", x: point[0], y: point[1] });
+    }, 250);
+  }
+
+  function stopTooltipKeeper(instance) {
+    if (instance && state.tooltipKeeperChart !== instance) {
+      if (!instance.isDisposed()) instance.dispatchAction({ type: "hideTip" });
+      return false;
+    }
+
+    if (state.tooltipKeeperTimer) {
+      window.clearInterval(state.tooltipKeeperTimer);
+      state.tooltipKeeperTimer = 0;
+    }
+    const chart = state.tooltipKeeperChart;
+    if (chart && !chart.isDisposed()) {
+      chart.dispatchAction({ type: "hideTip" });
+    }
+    state.tooltipKeeperChart = null;
+    state.tooltipKeeperPoint = null;
+    state.tooltipActive = false;
+    return true;
   }
 
   function buildChartOption(key, panelData) {
@@ -1229,10 +1324,29 @@
 
   function updateChartTheme() {
     if (!state.lastPanelData) return;
+    if (state.tooltipActive) {
+      state.pendingThemeUpdate = true;
+      return;
+    }
     for (const entry of state.charts) {
       if (entry.instance.isDisposed()) continue;
       const option = buildChartOption(entry.key, state.lastPanelData);
       if (option) entry.instance.setOption(option, { notMerge: true });
+    }
+  }
+
+  function flushPendingChartUpdates() {
+    if (state.tooltipActive) return;
+
+    if (state.pendingThemeUpdate && state.lastPanelData) {
+      state.pendingThemeUpdate = false;
+      updateChartTheme();
+    }
+
+    if (state.pendingPanelData) {
+      const pending = state.pendingPanelData;
+      state.pendingPanelData = null;
+      updateChartsData(pending);
     }
   }
 
@@ -1300,6 +1414,10 @@
   }
 
   function updateChartsData(panelData) {
+    if (state.tooltipActive) {
+      state.pendingPanelData = panelData;
+      return;
+    }
     const remaining = [];
     for (const entry of state.charts) {
       const option = buildChartOption(entry.key, panelData);
@@ -1324,6 +1442,15 @@
           const option = buildChartOption(key, panelData);
           if (!container || !option) continue;
           const instance = echarts.init(container, null, { renderer: "svg" });
+          const zr = instance.getZr();
+          zr.on("mousemove", (event) => {
+            startTooltipKeeper(instance, event);
+          });
+          zr.on("globalout", () => {
+            if (stopTooltipKeeper(instance)) {
+              flushPendingChartUpdates();
+            }
+          });
           instance.setOption(option);
           state.charts.push({ key, instance });
         }
@@ -1450,6 +1577,7 @@
       tooltip: {
         confine: true,
         trigger: "item",
+        ...tooltipInteractionOption(),
         extraCssText: getTooltipCss(),
         formatter: (params) => tooltipHtml(params.name, [
           { color: params.color, label: "Tokens", value: formatInteger(params.value) },
@@ -1494,6 +1622,7 @@
       tooltip: {
         confine: true,
         trigger: "axis",
+        ...tooltipInteractionOption(),
         axisPointer: { type: "shadow", shadowStyle: { color: "rgba(2,14,54,0.04)" } },
         extraCssText: getTooltipCss(),
         formatter: (params) => tooltipHtml(params[0]?.name || "", [
@@ -1588,6 +1717,7 @@
   }
 
   function ensurePanel() {
+    if (!isUsagePage()) return null;
     injectStyles();
     document.body.classList.add("dsapi-plus-page-wide");
 
@@ -1643,6 +1773,7 @@
   }
 
   async function refresh(force) {
+    if (!isUsagePage()) return;
     const panel = ensurePanel();
     if (!panel) return;
 
@@ -1687,6 +1818,24 @@
     state.refreshTimer = window.setTimeout(() => refresh(force), 120);
   }
 
+  function teardownUsage() {
+    window.clearTimeout(state.refreshTimer);
+    window.clearTimeout(state.mutationTimer);
+    window.clearTimeout(state.routeTimer);
+    state.abortController?.abort();
+    state.abortController = null;
+    if (state.observer) {
+      state.observer.disconnect();
+      state.observer = null;
+    }
+    disposeCharts();
+    state.lastPanelData = null;
+    state.selectedPeriod = "";
+    state.booted = false;
+    const panel = document.getElementById(PANEL_ID);
+    if (panel) panel.remove();
+  }
+
   function startObservers() {
     document.addEventListener("change", (event) => {
       const target = event.target;
@@ -1710,11 +1859,55 @@
     state.observer.observe(document.body, { childList: true, subtree: true });
   }
 
-  function boot() {
+  function bootUsage() {
+    if (state.booted) return;
+    state.booted = true;
     ensurePanel();
     startObservers();
     startThemeObserver();
     scheduleRefresh(true);
+  }
+
+  function handleRouteChange() {
+    if (isUsagePage()) {
+      bootUsage();
+    } else if (state.booted) {
+      teardownUsage();
+    }
+  }
+
+  function installRouteObserver() {
+    if (!state.historyHooked) {
+      state.historyHooked = true;
+      const notifyRouteChange = () => {
+        window.clearTimeout(state.routeTimer);
+        state.routeTimer = window.setTimeout(handleRouteChange, 50);
+      };
+
+      const wrapHistoryMethod = (name) => {
+        const original = history[name];
+        history[name] = function (...args) {
+          const result = original.apply(this, args);
+          notifyRouteChange();
+          return result;
+        };
+      };
+
+      wrapHistoryMethod("pushState");
+      wrapHistoryMethod("replaceState");
+      window.addEventListener("popstate", notifyRouteChange);
+      window.addEventListener("hashchange", notifyRouteChange);
+      new MutationObserver(notifyRouteChange).observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+      });
+    }
+
+    handleRouteChange();
+  }
+
+  function boot() {
+    installRouteObserver();
   }
 
   if (document.readyState === "loading") {
