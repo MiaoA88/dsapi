@@ -1,6 +1,6 @@
 # DeepSeek Usage+ — 官方用量页增强仪表盘
 
-[![Version](https://img.shields.io/badge/version-1.7.0-blue)](https://github.com/codex/dsapi)
+[![Version](https://img.shields.io/badge/version-1.7.1-blue)](https://github.com/miaoa88/dsapi)
 
 DeepSeek 官方用量页只展示了几个基础数字和一张简表。这个油猴脚本在其基础上扩展为完整的数据分析仪表盘——费用细分、Token 构成、交互图表、模型明细，全部在页面内展开。
 
@@ -61,3 +61,10 @@ DeepSeek 官方用量页只展示了几个基础数字和一张简表。这个�
 ## License
 
 MIT
+
+## v1.7.1 更新日志
+
+- 修复首次进入 DeepSeek 用量页时脚本未立即生效，需要手动刷新后才显示增强面板的问题。
+- 修复扩展图表 tooltip 鼠标悬停不动时自动闪退的问题。
+- 优化多个图表之间移动鼠标时的 tooltip 切换行为，避免旧悬浮窗残留。
+- 清理 tooltip 相关冗余配置，提升交互稳定性。
