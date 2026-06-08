@@ -1,8 +1,8 @@
-# DeepSeek Usage+ — 官方用量页增强仪表盘
+# DeepSeek Usage+ — 官方API用量页增强仪表盘
 
 [![Version](https://img.shields.io/badge/version-1.7.2-blue)](https://github.com/miaoa88/dsapi)
 
-DeepSeek 官方用量页只展示了几个基础数字和一张简表。这个油猴脚本在其基础上扩展为完整的数据分析仪表盘——费用细分、Token 构成、交互图表、模型明细，全部在页面内展开。
+DeepSeek 官方API用量页只展示了几个基础数字和一张简表。本脚本在其基础上扩展为完整的数据分析仪表盘，包含费用细分、Token 构成、交互图表、缓存命中率等，并在 DeepSeek 对话页左上角补上直达入口，方便一键跳转到API用量页。
 
 ## 效果对比
 
@@ -62,12 +62,6 @@ DeepSeek 官方用量页只展示了几个基础数字和一张简表。这个�
 ## License
 
 MIT
-
-## v1.7.2 更新日志
-
-- 新增 DeepSeek 对话页入口：在左上角按钮组中新增加 API 用量按钮。
-- 点击该按钮会在新标签页打开 `https://platform.deepseek.com/usage`。
-- 新按钮不显示额外文字提示，避免与官网原生 tooltip 样式不一致。
 
 ## v1.7.1 更新日志
 
