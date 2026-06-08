@@ -1,6 +1,6 @@
 # DeepSeek Usage+ — 官方用量页增强仪表盘
 
-[![Version](https://img.shields.io/badge/version-1.7.1-blue)](https://github.com/miaoa88/dsapi)
+[![Version](https://img.shields.io/badge/version-1.7.2-blue)](https://github.com/miaoa88/dsapi)
 
 DeepSeek 官方用量页只展示了几个基础数字和一张简表。这个油猴脚本在其基础上扩展为完整的数据分析仪表盘——费用细分、Token 构成、交互图表、模型明细，全部在页面内展开。
 
@@ -41,6 +41,7 @@ DeepSeek 官方用量页只展示了几个基础数字和一张简表。这个�
 - 切换月份自动刷新数据
 - 调试模式：点击按钮在控制台查看 API 返回结构
 - 请求自动取消和 30 秒超时
+- 在 DeepSeek 对话页左上角新增 API 用量入口按钮，点击后新标签页打开用量页
 
 ## 安装
 
@@ -51,7 +52,7 @@ DeepSeek 官方用量页只展示了几个基础数字和一张简表。这个�
 ## 兼容性
 
 - 浏览器：Chrome / Firefox / Edge（Tampermonkey 或 Violentmonkey）
-- 页面：`https://platform.deepseek.com/usage*`
+- 页面：`https://platform.deepseek.com/usage*`、`https://chat.deepseek.com/*`
 
 ## 技术栈
 
@@ -62,9 +63,19 @@ DeepSeek 官方用量页只展示了几个基础数字和一张简表。这个�
 
 MIT
 
+## v1.7.2 更新日志
+
+- 新增 DeepSeek 对话页入口：在左上角按钮组中新增加 API 用量按钮。
+- 点击该按钮会在新标签页打开 `https://platform.deepseek.com/usage`。
+- 新按钮不显示额外文字提示，避免与官网原生 tooltip 样式不一致。
+
 ## v1.7.1 更新日志
 
 - 修复首次进入 DeepSeek 用量页时脚本未立即生效，需要手动刷新后才显示增强面板的问题。
 - 修复扩展图表 tooltip 鼠标悬停不动时自动闪退的问题。
 - 优化多个图表之间移动鼠标时的 tooltip 切换行为，避免旧悬浮窗残留。
 - 清理 tooltip 相关冗余配置，提升交互稳定性。
+
+## GitHub
+[GitHub](https://github.com/MiaoA88/dsapi)
+可提交issue、pr
