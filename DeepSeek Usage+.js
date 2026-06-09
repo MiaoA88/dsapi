@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DeepSeek Usage+ — 官方API用量页增强仪表盘
 // @namespace    https://platform.deepseek.com/
-// @version      1.7.2
+// @version      1.7.3
 // @description  DeepSeek 官方用量页仅展示基础数字，本脚本扩展为完整仪表盘：费用细分、Token 构成、交互图表、模型明细。Turns the bare-bones official page into a full analytics dashboard.
 // @author       miaoa88
 // @match        https://platform.deepseek.com/*
@@ -709,7 +709,9 @@
       : asArray(firstValue(findUsageDataObject(raw) || raw || {}, ["cost", "costs", "currencies", "data"]));
     return list.map((currencyBlock) => {
       const total = asArray(firstValue(currencyBlock, ["total", "totals", "models", "model_cost", "modelCost"]));
-      const days = asArray(firstValue(currencyBlock, ["days", "daily", "daily_cost", "dailyCost"]));
+      const days = normalizeDailyCostData(
+        asArray(firstValue(currencyBlock, ["days", "daily", "daily_cost", "dailyCost"]))
+      );
       const modelCosts = total.map((item) => {
         const usage = getUsageList(item);
         const usageCostMap = usageToMap(usage);
@@ -726,6 +728,26 @@
         modelCosts,
         days,
       };
+    });
+  }
+
+  function normalizeDailyCostData(days) {
+    return days.map((day) => {
+      const date = firstValue(day, ["date", "day"]) || "";
+      let amount = Number(firstValue(day, ["amount", "value", "cost", "total"]) || 0);
+
+      if (!amount) {
+        const models = asArray(firstValue(day, ["models", "data", "costs", "model_cost", "modelCost"]));
+        amount = models.reduce((sum, model) => {
+          const usage = getUsageList(model);
+          if (usage.length) {
+            return sum + usage.reduce((s, u) => s + Number(firstValue(u, ["amount", "value", "cost"]) || 0), 0);
+          }
+          return sum + Number(firstValue(model, ["amount", "value", "cost"]) || 0);
+        }, 0);
+      }
+
+      return { date, amount };
     });
   }
 
@@ -935,11 +957,44 @@
       }
       if (!today) today = daysArr.length ? daysArr[daysArr.length - 1] : null;
     }
+    // 从 cost API 每日数据中获取今天的实际消费金额
+    let todayActualCost = 0;
+    for (const costBlock of cost) {
+      if (costBlock.currency !== "CNY") continue;
+      for (const dayCost of (costBlock.days || [])) {
+        const match = String(dayCost.date || "").match(/(\d{1,2})$/);
+        if (match && Number(match[1]) === todayDay) {
+          todayActualCost += (dayCost.amount || 0);
+        }
+      }
+    }
+
     const todayInputTokens = today ? (today.promptMiss || 0) + (today.promptHit || 0) : 0;
     const todayOutputTokens = today ? (today.response || 0) : 0;
-    const todayInputCost = averageInputCostPerMillion > 0 ? averageInputCostPerMillion * todayInputTokens / 1000000 : 0;
-    const todayOutputCost = averageOutputCostPerMillion > 0 ? averageOutputCostPerMillion * todayOutputTokens / 1000000 : 0;
-    const todayTotalCost = todayInputCost + todayOutputCost;
+    // 先用均价估算作为基准
+    const todayInputCostEstimated = averageInputCostPerMillion > 0 ? averageInputCostPerMillion * todayInputTokens / 1000000 : 0;
+    const todayOutputCostEstimated = averageOutputCostPerMillion > 0 ? averageOutputCostPerMillion * todayOutputTokens / 1000000 : 0;
+    const todayTotalCostEstimated = todayInputCostEstimated + todayOutputCostEstimated;
+
+    // 优先使用 cost API 的实际每日数据，估算值作为 fallback
+    let todayTotalCost, todayInputCost, todayOutputCost;
+    if (todayActualCost > 0) {
+      todayTotalCost = todayActualCost;
+      // 按实际总额等比缩放输入/输出估算值以保持细分一致
+      if (todayTotalCostEstimated > 0) {
+        const scale = todayActualCost / todayTotalCostEstimated;
+        todayInputCost = todayInputCostEstimated * scale;
+        todayOutputCost = todayOutputCostEstimated * scale;
+      } else {
+        todayInputCost = 0;
+        todayOutputCost = 0;
+      }
+    } else {
+      todayTotalCost = todayTotalCostEstimated;
+      todayInputCost = todayInputCostEstimated;
+      todayOutputCost = todayOutputCostEstimated;
+    }
+
     const todayCostText = formatCnyAmount(todayTotalCost);
     const todayCostDetail = `输入 ${formatCnyAmount(todayInputCost)} · 输出 ${formatCnyAmount(todayOutputCost)}`;
     const costDetail = `输入 ${formatCnyAmount(cnyCostBreakdown.input)} · 输出 ${formatCnyAmount(cnyCostBreakdown.output)}`;
