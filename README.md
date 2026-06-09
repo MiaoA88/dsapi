@@ -1,6 +1,6 @@
 # DeepSeek Usage+ — 官方API用量页增强仪表盘
 
-[![Version](https://img.shields.io/badge/version-1.7.2-blue)](https://github.com/miaoa88/dsapi)
+[![Version](https://img.shields.io/badge/version-1.7.3-blue)](https://github.com/miaoa88/dsapi)
 
 DeepSeek 官方API用量页只展示了几个基础数字和一张简表。本脚本在其基础上扩展为完整的数据分析仪表盘，包含费用细分、Token 构成、交互图表、缓存命中率等，并在 DeepSeek 对话页左上角补上直达入口，方便一键跳转到API用量页。
 
@@ -62,6 +62,10 @@ DeepSeek 官方API用量页只展示了几个基础数字和一张简表。本�
 ## License
 
 MIT
+
+## v1.7.3 更新日志
+
+- 修复"今日消费"金额与实际消费不一致的问题。此前为计算逻辑有点问题吗，导致会有点偏差，现在已修复。
 
 ## v1.7.2 更新日志
 
