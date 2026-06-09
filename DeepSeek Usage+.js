@@ -2,7 +2,7 @@
 // @name         DeepSeek Usage+ — 官方API用量页增强仪表盘
 // @namespace    https://platform.deepseek.com/
 // @version      1.7.3
-// @description  DeepSeek 官方用量页仅展示基础数字，本脚本扩展为完整仪表盘：费用细分、Token 构成、交互图表、模型明细。Turns the bare-bones official page into a full analytics dashboard.
+// @description  DeepSeek 官方API用量页只展示了基础数字和简表。本脚本在其基础上扩展为完整的数据分析仪表盘，包含费用细分、Token 构成、交互图表、缓存命中率等，并在 DeepSeek 对话页左上角补上直达入口，方便一键跳转到API用量页。
 // @author       miaoa88
 // @match        https://platform.deepseek.com/*
 // @match        https://chat.deepseek.com/*
