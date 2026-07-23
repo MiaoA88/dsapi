@@ -1,6 +1,6 @@
 # DeepSeek Usage+ — 官方API用量页增强仪表盘
 
-[![Version](https://img.shields.io/badge/version-1.7.3-blue)](https://github.com/miaoa88/dsapi)
+[![Version](https://img.shields.io/badge/version-1.8.1-blue)](https://github.com/miaoa88/dsapi)
 
 DeepSeek 官方API用量页只展示了几个基础数字和一张简表。本脚本在其基础上扩展为完整的数据分析仪表盘，包含费用细分、Token 构成、交互图表、缓存命中率等，并在 DeepSeek 对话页左上角补上直达入口，方便一键跳转到API用量页。
 
@@ -62,6 +62,18 @@ DeepSeek 官方API用量页只展示了几个基础数字和一张简表。本�
 ## License
 
 MIT
+
+## v1.8.1 更新日志
+
+- 修复扩展面板内拖选文字时选区被打断/乱跳的问题。
+- 概览明细中「输入 / 输出」由中间点号改为换行显示。
+
+## v1.8.0 更新日志
+
+- 对齐 DeepSeek 开放平台最新用量页视觉：模块卡片、大号数值、胶囊按钮、圆角容器等。
+- 样式改用官方 `--dsw-alias-*` / `--dsw-font-*` 设计变量，自动跟随浅色/深色主题。
+- 图表配色、Tooltip 样式贴近现行官方用量图表。
+- 模型明细表放入圆角模块卡片，表格与悬停态与页面整体一致。
 
 ## v1.7.3 更新日志
 

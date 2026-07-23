@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DeepSeek Usage+ — 官方API用量页增强仪表盘
 // @namespace    https://platform.deepseek.com/
-// @version      1.7.3
+// @version      1.8.1
 // @description  DeepSeek 官方API用量页只展示了基础数字和简表。本脚本在其基础上扩展为完整的数据分析仪表盘，包含费用细分、Token 构成、交互图表、缓存命中率等，并在 DeepSeek 对话页左上角补上直达入口，方便一键跳转到API用量页。
 // @author       miaoa88
 // @match        https://platform.deepseek.com/*
@@ -67,186 +67,239 @@
     style.id = STYLE_ID;
     style.textContent = `
       .dsapi-plus-panel {
-        --dsapi-plus-text: rgb(var(--ds-rgb-label-1, 2 14 54));
-        --dsapi-plus-muted: rgb(var(--ds-rgb-label-2, 87 97 135));
+        --dsapi-plus-text: var(--dsw-alias-label-primary, rgb(15, 17, 21));
+        --dsapi-plus-muted: var(--dsw-alias-label-secondary, rgb(87, 97, 135));
+        --dsapi-plus-tertiary: var(--dsw-alias-label-tertiary, rgb(120, 128, 156));
+        --dsapi-plus-caption: var(--dsw-alias-label-caption, rgb(150, 156, 176));
+        --dsapi-plus-module: var(--dsw-alias-bg-module-platform, #f5f6f7);
+        --dsapi-plus-border: var(--dsw-alias-border-l2, rgba(0, 0, 0, 0.1));
+        --dsapi-plus-border-soft: var(--dsw-alias-border-l1, rgba(0, 0, 0, 0.04));
+        --dsapi-plus-interactive: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.04));
+        --dsapi-plus-font: var(--dsw-font-family, inherit);
         box-sizing: border-box;
         width: 100%;
-        margin: 0 0 42px;
+        margin: 0 0 40px;
         padding: 0;
         border: 0;
         background: transparent;
         color: var(--dsapi-plus-text);
-        font-family: inherit;
+        font-family: var(--dsapi-plus-font);
+        -webkit-user-select: text;
+        user-select: text;
+      }
+      .dsapi-plus-panel *,
+      .dsapi-plus-panel *::before,
+      .dsapi-plus-panel *::after {
+        box-sizing: border-box;
       }
       .dsapi-plus-page-wide .b7e4e307,
       .dsapi-plus-page-wide main > div {
         max-width: none !important;
       }
       .dsapi-plus-page-wide ._6660b4d {
-        padding-left: clamp(20px, 3vw, 44px) !important;
-        padding-right: clamp(20px, 3vw, 44px) !important;
+        padding-left: clamp(20px, 3vw, 40px) !important;
+        padding-right: clamp(20px, 3vw, 40px) !important;
       }
-      .dsapi-plus-head,
-      .dsapi-plus-summary,
-      .dsapi-plus-section-head {
+      .dsapi-plus-head {
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         justify-content: space-between;
         gap: 16px;
+        margin-bottom: 0;
       }
       .dsapi-plus-title {
         display: flex;
         align-items: baseline;
-        gap: 10px;
+        flex-wrap: wrap;
+        gap: 8px 12px;
         min-width: 0;
       }
       .dsapi-plus-title strong {
-        font-size: 16px;
-        line-height: 16px;
-        font-weight: var(--ds-font-weight-strong, 600);
+        color: var(--dsapi-plus-text);
+        font: var(--dsw-font-base-strong-16, 500 16px/24px inherit);
       }
       .dsapi-plus-subtitle {
-        color: var(--dsapi-plus-muted);
-        font-size: 12px;
-        line-height: 18px;
+        color: var(--dsw-alias-label-tertiary, var(--dsapi-plus-tertiary));
+        font: var(--dsw-font-s-14, 14px/22px inherit);
       }
       .dsapi-plus-actions {
         display: flex;
         align-items: center;
-        gap: 10px;
+        gap: 12px;
         flex-shrink: 0;
       }
-      .dsapi-plus-head {
-        margin-bottom: 0;
-      }
       .dsapi-plus-status {
-        color: var(--dsapi-plus-muted);
-        font-size: 12px;
-        line-height: 18px;
+        color: var(--dsw-alias-label-tertiary, var(--dsapi-plus-tertiary));
+        font: var(--dsw-font-s-14, 14px/22px inherit);
         white-space: nowrap;
       }
       .dsapi-plus-refresh {
         appearance: none;
-        border: 0;
-        border-radius: 6px;
-        background: rgba(2, 14, 54, 0.05);
-        color: var(--dsapi-plus-text);
+        box-sizing: border-box;
+        border: none;
+        border-radius: 18px;
+        min-width: 72px;
+        height: 36px;
+        padding: 0 14px;
+        background: var(--dsw-alias-button-primary-fill, #3964fe);
+        color: var(--dsw-alias-label-primary-foreground, #fff);
         cursor: pointer;
-        font: inherit;
-        font-size: 12px;
-        line-height: 18px;
-        padding: 5px 10px;
+        font: var(--dsw-font-s-14, 14px/22px inherit);
+        font-weight: 500;
+        transition: background-color var(--ds-transition-duration, 0.15s) var(--ds-ease-in-out, ease);
+        -webkit-user-select: none;
+        user-select: none;
       }
       .dsapi-plus-refresh:hover {
-        background: rgba(2, 14, 54, 0.08);
+        background: var(--dsw-alias-button-primary-hover, #2f54e0);
       }
       .dsapi-plus-debug {
         appearance: none;
         border: 0;
         background: transparent;
-        color: var(--dsapi-plus-muted);
+        color: var(--dsw-alias-label-secondary, var(--dsapi-plus-muted));
         cursor: pointer;
-        font: inherit;
-        font-size: 12px;
-        line-height: 18px;
-        padding: 5px 0;
+        font: var(--dsw-font-s-14, 14px/22px inherit);
+        padding: 0;
       }
       .dsapi-plus-debug:hover {
         color: var(--dsapi-plus-text);
       }
       .dsapi-plus-body {
-        margin-top: 21px;
+        margin-top: 24px;
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
       }
       .dsapi-plus-summary {
-        align-items: flex-start;
-        justify-content: flex-start;
+        display: flex;
         flex-wrap: wrap;
-        margin-bottom: 32px;
+        align-items: stretch;
+        gap: 12px;
+        margin: 0;
       }
       .dsapi-plus-summary-item {
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        gap: 12px;
+        flex: 1 1 220px;
         min-width: 0;
-        margin-right: 28px;
+        min-height: 100px;
+        margin: 0;
+        padding: 16px 20px;
+        background: var(--dsapi-plus-module);
+        border-radius: 16px;
       }
       .dsapi-plus-summary-label {
-        color: var(--dsapi-plus-muted);
-        font-size: 12px;
-        line-height: 18px;
+        color: var(--dsapi-plus-text);
+        font: var(--dsw-font-s-14, 14px/22px inherit);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .dsapi-plus-summary-value-row {
+        display: inline-flex;
+        align-items: baseline;
+        flex-wrap: wrap;
+        gap: 6px;
+        min-width: 0;
       }
       .dsapi-plus-summary-value {
-        margin-top: 5px;
-        font-size: 16px;
-        font-weight: var(--ds-font-weight-strong, 600);
-        line-height: 22px;
+        margin: 0;
+        color: var(--dsapi-plus-text);
+        font-size: 29px;
+        font-weight: 500;
+        line-height: 36px;
         font-variant-numeric: tabular-nums;
         overflow-wrap: anywhere;
       }
       .dsapi-plus-summary-unit {
-        color: var(--dsapi-plus-muted);
-        font-size: 12px;
+        color: var(--dsw-alias-label-caption, var(--dsapi-plus-caption));
+        font-size: 16px;
         font-weight: 400;
-        line-height: 18px;
-        margin-left: 4px;
+        line-height: 24px;
+        margin: 0;
       }
       .dsapi-plus-summary-detail {
-        color: var(--dsapi-plus-muted);
-        font-size: 12px;
-        font-weight: 400;
-        line-height: 18px;
-        margin-top: 2px;
+        color: var(--dsw-alias-label-secondary, var(--dsapi-plus-muted));
+        font: var(--dsw-font-s-14, 14px/22px inherit);
+        margin-top: -4px;
+        white-space: pre-line;
       }
       .dsapi-plus-section {
-        margin-top: 18px;
+        margin: 0;
       }
       .dsapi-plus-section-head {
         display: flex;
         align-items: baseline;
         justify-content: flex-start;
         gap: 12px;
-        margin-bottom: 10px;
+        margin-bottom: 16px;
       }
       .dsapi-plus-section-title {
-        font-size: 14px;
-        font-weight: 650;
-        line-height: 20px;
+        color: var(--dsapi-plus-text);
+        font: var(--dsw-font-base-strong-16, 500 16px/24px inherit);
+        margin: 0;
       }
       .dsapi-plus-section-meta {
-        color: var(--dsapi-plus-muted);
-        font-size: 12px;
-        line-height: 18px;
+        color: var(--dsw-alias-label-secondary, var(--dsapi-plus-muted));
+        font: var(--dsw-font-s-14, 14px/22px inherit);
       }
       .dsapi-plus-chart-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 42px 64px;
+        gap: 12px;
       }
       .dsapi-plus-chart-block {
+        box-sizing: border-box;
         min-width: 0;
+        background: var(--dsapi-plus-module);
+        border-radius: 16px;
+        padding: 20px 20px 12px;
       }
       .dsapi-plus-chart-heading {
         display: flex;
+        flex-wrap: wrap;
         align-items: baseline;
-        gap: 12px;
-        margin-bottom: 18px;
+        gap: 6px 4px;
+        min-width: 0;
+        margin: 0 0 12px;
       }
       .dsapi-plus-chart-heading-title {
-        font-size: var(--ds-font-size-sp, 14px);
-        line-height: var(--ds-line-height-sp, 18px);
-        font-weight: 400;
+        color: var(--dsapi-plus-text);
+        font: var(--dsw-font-s-strong-14, 500 14px/22px inherit);
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        overflow: hidden;
       }
       .dsapi-plus-chart-heading-value {
-        color: var(--dsapi-plus-muted);
-        font-size: var(--ds-font-size-sp, 14px);
-        line-height: var(--ds-line-height-sp, 18px);
+        color: var(--dsw-alias-label-secondary, var(--dsapi-plus-muted));
+        font: var(--dsw-font-s-14, 14px/22px inherit);
         font-variant-numeric: tabular-nums;
-        white-space: nowrap;
+        word-break: keep-all;
+        flex-shrink: 0;
       }
       .dsapi-plus-chart-frame {
-        height: 160px;
+        height: 200px;
         position: relative;
+        -webkit-user-select: none;
+        user-select: none;
       }
       .dsapi-plus-chart {
         width: 100%;
-        height: 160px;
+        height: 200px;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      .dsapi-plus-table-card {
+        box-sizing: border-box;
+        min-width: 0;
+        background: var(--dsapi-plus-module);
+        border-radius: 16px;
+        padding: 12px 8px 8px;
+        overflow: hidden;
       }
       .dsapi-plus-table-wrap {
         overflow-x: auto;
@@ -255,18 +308,18 @@
       }
       .dsapi-plus-table {
         width: 100%;
-        min-width: 620px;
+        min-width: 680px;
         border-collapse: collapse;
-        font-size: 12px;
-        line-height: 18px;
+        font: var(--dsw-font-s-14, 14px/22px inherit);
       }
       .dsapi-plus-table th,
       .dsapi-plus-table td {
-        padding: 9px 10px;
-        border-bottom: 1px solid rgba(2, 14, 54, 0.07);
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--dsapi-plus-border-soft);
         text-align: right;
         white-space: nowrap;
         font-variant-numeric: tabular-nums;
+        color: var(--dsapi-plus-text);
       }
       .dsapi-plus-table th:first-child,
       .dsapi-plus-table td:first-child {
@@ -276,55 +329,54 @@
         text-overflow: ellipsis;
       }
       .dsapi-plus-table th {
-        color: var(--dsapi-plus-muted);
-        background: rgba(2, 14, 54, 0.035);
-        font-weight: 600;
+        color: var(--dsw-alias-label-tertiary, var(--dsapi-plus-tertiary));
+        background: transparent;
+        font-weight: 500;
+      }
+      .dsapi-plus-table tbody tr:hover td {
+        background: var(--dsapi-plus-interactive);
       }
       .dsapi-plus-table tr:last-child td {
         border-bottom: 0;
       }
       .dsapi-plus-message {
-        border: 1px dashed rgba(2, 14, 54, 0.14);
-        border-radius: 8px;
-        color: var(--dsapi-plus-muted);
-        font-size: 13px;
-        line-height: 20px;
-        padding: 16px;
+        border: 1px solid var(--dsapi-plus-border-soft);
+        border-radius: 16px;
+        background: var(--dsapi-plus-module);
+        color: var(--dsw-alias-label-secondary, var(--dsapi-plus-muted));
+        font: var(--dsw-font-s-14, 14px/22px inherit);
+        padding: 16px 20px;
       }
       .dsapi-plus-detail-layout {
         display: grid;
         grid-template-columns: minmax(0, 1fr) minmax(300px, 28%);
-        gap: 20px;
+        gap: 12px;
         align-items: start;
       }
       .dsapi-plus-model-donut {
+        box-sizing: border-box;
         min-width: 0;
+        background: var(--dsapi-plus-module);
+        border-radius: 16px;
+        padding: 20px 20px 12px;
       }
       .dsapi-plus-model-donut .dsapi-plus-chart-heading {
-        margin-bottom: 6px;
+        margin-bottom: 8px;
       }
       .dsapi-plus-model-donut .dsapi-plus-chart-frame {
-        height: 136px;
+        height: 180px;
       }
       .dsapi-plus-model-donut .dsapi-plus-chart {
-        height: 136px;
+        height: 180px;
       }
       .dsapi-plus-error {
-        border-color: rgba(214, 69, 65, 0.28);
-        color: rgb(170, 49, 45);
-        background: rgba(214, 69, 65, 0.04);
-      }
-      body.dark .dsapi-plus-table th,
-      body.dark .dsapi-plus-table td {
-        border-bottom-color: rgba(255, 255, 255, 0.08);
-      }
-      body.dark .dsapi-plus-table th {
-        background: rgba(255, 255, 255, 0.06);
+        border-color: var(--dsw-alias-state-error-secondary, rgba(214, 69, 65, 0.28));
+        color: var(--dsw-alias-state-error-primary, rgb(170, 49, 45));
+        background: color-mix(in srgb, var(--dsw-alias-state-error-primary, #d64541) 6%, transparent);
       }
       @media (max-width: 920px) {
         .dsapi-plus-chart-grid {
           grid-template-columns: 1fr;
-          gap: 32px;
         }
         .dsapi-plus-detail-layout {
           grid-template-columns: 1fr;
@@ -332,9 +384,17 @@
       }
       @media (max-width: 560px) {
         .dsapi-plus-head,
-        .dsapi-plus-section-head {
+        .dsapi-plus-section-head,
+        .dsapi-plus-actions {
           align-items: flex-start;
           flex-direction: column;
+        }
+        .dsapi-plus-summary-item {
+          flex-basis: 100%;
+        }
+        .dsapi-plus-summary-value {
+          font-size: 24px;
+          line-height: 32px;
         }
       }
     `;
@@ -369,8 +429,12 @@
     return `${symbol}${formatDecimal(item.amount ?? item.balance ?? 0, 6)}${currency ? ` ${currency}` : ""}`;
   }
 
+  function formatCnyValue(value, digits = 4) {
+    return `¥${formatDecimal(value, digits)}`;
+  }
+
   function formatCnyAmount(value, digits = 4) {
-    return `¥${formatDecimal(value, digits)} CNY`;
+    return `${formatCnyValue(value, digits)} CNY`;
   }
 
   function escapeHtml(value) {
@@ -935,7 +999,7 @@
     const estimatedAvailableTokens = averageCostPerMillion > 0
       ? Math.floor(walletCnyBalance / averageCostPerMillion * 1000000)
       : 0;
-    const averageCostDetail = `输入 ${formatCnyAmount(averageInputCostPerMillion)} /1M · 输出 ${formatCnyAmount(averageOutputCostPerMillion)} /1M`;
+    const averageCostDetail = `输入 ${formatCnyAmount(averageInputCostPerMillion)} /1M\n输出 ${formatCnyAmount(averageOutputCostPerMillion)} /1M`;
 
     const daysArr = amount.days;
     const now = new Date();
@@ -996,10 +1060,10 @@
     }
 
     const todayCostText = formatCnyAmount(todayTotalCost);
-    const todayCostDetail = `输入 ${formatCnyAmount(todayInputCost)} · 输出 ${formatCnyAmount(todayOutputCost)}`;
-    const costDetail = `输入 ${formatCnyAmount(cnyCostBreakdown.input)} · 输出 ${formatCnyAmount(cnyCostBreakdown.output)}`;
+    const todayCostDetail = `输入 ${formatCnyAmount(todayInputCost)}\n输出 ${formatCnyAmount(todayOutputCost)}`;
+    const costDetail = `输入 ${formatCnyAmount(cnyCostBreakdown.input)}\n输出 ${formatCnyAmount(cnyCostBreakdown.output)}`;
     const usageInput = amount.aggregate.promptMiss + amount.aggregate.promptHit;
-    const usageDetail = `输入 ${formatInteger(usageInput)} tokens · 输出 ${formatInteger(amount.aggregate.response)} tokens`;
+    const usageDetail = `输入 ${formatInteger(usageInput)} tokens\n输出 ${formatInteger(amount.aggregate.response)} tokens`;
 
     const updateTime = new Date().toLocaleTimeString("zh-CN");
 
@@ -1018,10 +1082,10 @@
 
       <div class="dsapi-plus-body">
         <div class="dsapi-plus-summary">
-          ${summaryItem("今日消费", todayCostText, "", todayCostDetail)}
-          ${summaryItem("本月费用", monthlyCostText, "", costDetail)}
-          ${summaryItem("选中月份费用", monthCostText, "", costDetail)}
-          ${summaryItem("平均消费", formatCnyAmount(averageCostPerMillion), "/1M", averageCostDetail)}
+          ${summaryItem("今日消费", formatCnyValue(todayTotalCost), "CNY", todayCostDetail)}
+          ${summaryItem("本月费用", formatCnyValue(monthlyCnyCost), "CNY", costDetail)}
+          ${summaryItem("选中月份费用", formatCnyValue(monthCnyCost), "CNY", costDetail)}
+          ${summaryItem("平均消费", formatCnyValue(averageCostPerMillion), "CNY /1M", averageCostDetail)}
           ${summaryItem("本月用量", formatInteger(summary.monthlyUsage), "Tokens", usageDetail)}
           ${summaryItem("预估可用", estimatedAvailableTokens ? formatInteger(estimatedAvailableTokens) : "无法估算", estimatedAvailableTokens ? "Tokens" : "")}
         </div>
@@ -1086,6 +1150,9 @@
       cost,
       monthlyCostText,
       monthCostText,
+      monthlyCnyCost,
+      monthCnyCost,
+      todayTotalCost,
       todayCostText,
       todayCostDetail,
       costDetail,
@@ -1129,8 +1196,13 @@
     return `
       <div class="dsapi-plus-summary-item">
         <div class="dsapi-plus-summary-label">${escapeHtml(label)}</div>
-        <div class="dsapi-plus-summary-value">${escapeHtml(value)}${unit ? `<span class="dsapi-plus-summary-unit">${escapeHtml(unit)}</span>` : ""}</div>
-        ${detail ? `<div class="dsapi-plus-summary-detail">${escapeHtml(detail)}</div>` : ""}
+        <div>
+          <div class="dsapi-plus-summary-value-row">
+            <span class="dsapi-plus-summary-value">${escapeHtml(value)}</span>
+            ${unit ? `<span class="dsapi-plus-summary-unit">${escapeHtml(unit)}</span>` : ""}
+          </div>
+          ${detail ? `<div class="dsapi-plus-summary-detail">${escapeHtml(detail)}</div>` : ""}
+        </div>
       </div>
     `;
   }
@@ -1205,22 +1277,24 @@
       .join("");
 
     return `
-      <div class="dsapi-plus-table-wrap">
-        <table class="dsapi-plus-table">
-          <thead>
-            <tr>
-              <th>模型</th>
-              <th>请求数</th>
-              <th>Tokens</th>
-              <th>输出</th>
-              <th>输入未缓存</th>
-              <th>输入缓存命中</th>
-              <th>缓存命中占比</th>
-              <th>费用</th>
-            </tr>
-          </thead>
-          <tbody>${rows}</tbody>
-        </table>
+      <div class="dsapi-plus-table-card">
+        <div class="dsapi-plus-table-wrap">
+          <table class="dsapi-plus-table">
+            <thead>
+              <tr>
+                <th>模型</th>
+                <th>请求数</th>
+                <th>Tokens</th>
+                <th>输出</th>
+                <th>输入未缓存</th>
+                <th>输入缓存命中</th>
+                <th>缓存命中占比</th>
+                <th>费用</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
       </div>
     `;
   }
@@ -1237,21 +1311,29 @@
     return matched ? `${matched[1]}日` : String(value || "");
   }
 
+  function isDarkTheme() {
+    return document.body.classList.contains("dark")
+      || document.body.hasAttribute("data-ds-dark-theme")
+      || document.documentElement.hasAttribute("data-ds-dark-theme");
+  }
+
   function getChartTextColor() {
-    return document.body.classList.contains("dark") ? "rgba(150, 150, 150, 1)" : "rgba(2, 14, 54, 0.6)";
+    return isDarkTheme() ? "rgba(180, 184, 198, 0.9)" : "rgba(15, 17, 21, 0.55)";
   }
 
   function getChartGridColor() {
-    return document.body.classList.contains("dark") ? "rgba(60, 60, 60, 1)" : "#D2D8E5";
+    return isDarkTheme() ? "rgba(255, 255, 255, 0.12)" : "rgba(0, 0, 0, 0.1)";
   }
 
   function getTooltipCss() {
     return [
-      "padding: 12px",
-      "background-color: rgb(var(--ds-rgb-elevated, 255 255 255))",
-      "border-radius: 10px",
-      "box-shadow: 0 6px 16px 0 rgba(0, 0, 0, 0.08), 0 3px 6px -4px rgba(0, 0, 0, 0.12), 0 9px 28px 8px rgba(0, 0, 0, 0.05)",
-      "border: none",
+      "padding: 12px 24px",
+      "min-width: 200px",
+      "background-color: var(--dsw-alias-bg-layer-1, #fff)",
+      "border: 1px solid var(--dsw-alias-border-inverted, rgba(0,0,0,0.08))",
+      "border-radius: 24px",
+      "box-shadow: var(--dsw-shadow-lv3, 0 0 1px 0 rgba(0,0,0,.2), 0 0 4px 0 rgba(0,0,0,.02), 0 12px 32px 0 rgba(0,0,0,.08))",
+      "font-family: var(--dsw-font-family, inherit)",
     ].join(";") + ";";
   }
 
@@ -1322,8 +1404,19 @@
     state.charts = [];
   }
 
+  function isTextSelecting() {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) return false;
+    return selection.type === "Range" || String(selection).length > 0;
+  }
+
   function startTooltipKeeper(instance, event) {
     if (!instance || instance.isDisposed()) return;
+    // 文字拖选时不要反复 showTip，否则会破坏选区
+    if (isTextSelecting()) {
+      stopTooltipKeeper();
+      return;
+    }
     if (state.tooltipKeeperChart !== instance && state.tooltipKeeperTimer) {
       window.clearInterval(state.tooltipKeeperTimer);
       state.tooltipKeeperTimer = 0;
@@ -1349,7 +1442,7 @@
     state.tooltipKeeperTimer = window.setInterval(() => {
       const chart = state.tooltipKeeperChart;
       const point = state.tooltipKeeperPoint;
-      if (!state.tooltipActive || !chart || chart.isDisposed() || !point) {
+      if (!state.tooltipActive || !chart || chart.isDisposed() || !point || isTextSelecting()) {
         stopTooltipKeeper();
         return;
       }
@@ -1418,31 +1511,50 @@
   }
 
   function startThemeObserver() {
-    new MutationObserver((mutations) => {
+    const observer = new MutationObserver((mutations) => {
       for (const m of mutations) {
-        if (m.type === "attributes" && m.attributeName === "class") {
+        if (m.type === "attributes" && (m.attributeName === "class" || m.attributeName === "data-ds-dark-theme")) {
           updateChartTheme();
           break;
         }
       }
-    }).observe(document.body, { attributes: true, attributeFilter: ["class"] });
+    });
+    observer.observe(document.body, { attributes: true, attributeFilter: ["class", "data-ds-dark-theme"] });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-ds-dark-theme"] });
   }
 
   function updatePanelIncremental(panel, panelData) {
-    const { period, amount, summary, cost, monthlyCostText, monthCostText, todayCostText, todayCostDetail, costDetail, usageDetail, sortedModels, tokenTotal, averageCostPerMillion, averageCostDetail, estimatedAvailableTokens, updateTime } = panelData;
+    const {
+      period,
+      amount,
+      summary,
+      cost,
+      monthlyCnyCost,
+      monthCnyCost,
+      todayTotalCost,
+      todayCostDetail,
+      costDetail,
+      usageDetail,
+      sortedModels,
+      tokenTotal,
+      averageCostPerMillion,
+      averageCostDetail,
+      estimatedAvailableTokens,
+      updateTime,
+    } = panelData;
 
     const subtitle = panel.querySelector(".dsapi-plus-subtitle");
     const status = panel.querySelector(".dsapi-plus-status");
-    if (subtitle) subtitle.textContent = `${escapeHtml(period)} UTC，数据可能有约 5 分钟延迟`;
-    if (status) status.textContent = `已更新 ${escapeHtml(updateTime)}`;
+    if (subtitle) subtitle.textContent = `${period} UTC，数据可能有约 5 分钟延迟`;
+    if (status) status.textContent = `已更新 ${updateTime}`;
 
     const summaryEl = panel.querySelector(".dsapi-plus-summary");
     if (summaryEl) {
       summaryEl.innerHTML =
-        summaryItem("今日消费", todayCostText, "", todayCostDetail) +
-        summaryItem("本月费用", monthlyCostText, "", costDetail) +
-        summaryItem("选中月份费用", monthCostText, "", costDetail) +
-        summaryItem("平均消费", formatCnyAmount(averageCostPerMillion), "/1M", averageCostDetail) +
+        summaryItem("今日消费", formatCnyValue(todayTotalCost), "CNY", todayCostDetail) +
+        summaryItem("本月费用", formatCnyValue(monthlyCnyCost), "CNY", costDetail) +
+        summaryItem("选中月份费用", formatCnyValue(monthCnyCost), "CNY", costDetail) +
+        summaryItem("平均消费", formatCnyValue(averageCostPerMillion), "CNY /1M", averageCostDetail) +
         summaryItem("本月用量", formatInteger(summary.monthlyUsage), "Tokens", usageDetail) +
         summaryItem("预估可用", estimatedAvailableTokens ? formatInteger(estimatedAvailableTokens) : "无法估算", estimatedAvailableTokens ? "Tokens" : "");
     }
@@ -1548,7 +1660,7 @@
           value: formatInteger(model.request),
         }));
       return tooltipHtml(item.axisValue, modelRows.length ? modelRows : [
-        { color: "#0C70F3", label: "API 请求次数汇总", value: formatInteger(item.value) },
+        { color: "#FF810C", label: "API 请求次数汇总", value: formatInteger(item.value) },
       ]);
     };
     option.series = [
@@ -1557,9 +1669,9 @@
         type: "line",
         smooth: true,
         showSymbol: false,
-        itemStyle: { color: "#0C70F3" },
-        lineStyle: { color: "#0C70F3", width: 1.5 },
-        areaStyle: { color: "rgba(112, 178, 254, 0.7)" },
+        itemStyle: { color: "#FF810C" },
+        lineStyle: { color: "#FF810C", width: 1.5 },
+        areaStyle: { color: "rgba(255, 129, 12, 0.22)" },
         emphasis: { disabled: true },
       },
     ];
@@ -1575,9 +1687,9 @@
       const item = params[0];
       const day = days[item.dataIndex] || {};
       return tooltipHtml(item.axisValue, [
-        { color: "#0C70F3", label: "缓存命中率", value: formatPercent(item.value) },
-        { color: "#60B3FE", label: "缓存命中 Tokens", value: formatInteger(day.promptHit || 0) },
-        { color: "#A0DCFD", label: "输入 Tokens", value: formatInteger((day.promptHit || 0) + (day.promptMiss || 0)) },
+        { color: "#FF810C", label: "缓存命中率", value: formatPercent(item.value) },
+        { color: "#FFA10A", label: "缓存命中 Tokens", value: formatInteger(day.promptHit || 0) },
+        { color: "#FFC14D", label: "输入 Tokens", value: formatInteger((day.promptHit || 0) + (day.promptMiss || 0)) },
       ]);
     };
     option.series = [
@@ -1589,9 +1701,9 @@
         type: "line",
         smooth: true,
         showSymbol: false,
-        itemStyle: { color: "#0C70F3" },
-        lineStyle: { color: "#0C70F3", width: 1.5 },
-        areaStyle: { color: "rgba(112, 178, 254, 0.7)" },
+        itemStyle: { color: "#FF810C" },
+        lineStyle: { color: "#FF810C", width: 1.5 },
+        areaStyle: { color: "rgba(255, 129, 12, 0.22)" },
         emphasis: { disabled: true },
       },
     ];
@@ -1609,9 +1721,9 @@
       return tooltipHtml(params[0]?.axisValue || "", rows);
     };
     option.series = [
-      tokenBarSeries("输出 Tokens", days.map((day) => day.response), "#0C70F3"),
-      tokenBarSeries("输入未缓存", days.map((day) => day.promptMiss), "#60B3FE"),
-      tokenBarSeries("输入缓存命中", days.map((day) => day.promptHit), "#A0DCFD"),
+      tokenBarSeries("输出 Tokens", days.map((day) => day.response), "#FF810C"),
+      tokenBarSeries("输入未缓存", days.map((day) => day.promptMiss), "#FFA10A"),
+      tokenBarSeries("输入缓存命中", days.map((day) => day.promptHit), "#FFC14D"),
     ];
     return option;
   }
@@ -1630,9 +1742,9 @@
 
   function buildCompositionChartOption(aggregate) {
     return buildHorizontalBarOption([
-      { name: "输出 Tokens", value: aggregate.response, color: "#0C70F3" },
-      { name: "输入未缓存", value: aggregate.promptMiss, color: "#60B3FE" },
-      { name: "输入缓存命中", value: aggregate.promptHit, color: "#A0DCFD" },
+      { name: "输出 Tokens", value: aggregate.response, color: "#FF810C" },
+      { name: "输入未缓存", value: aggregate.promptMiss, color: "#FFA10A" },
+      { name: "输入缓存命中", value: aggregate.promptHit, color: "#FFC14D" },
     ]);
   }
 
@@ -1669,7 +1781,7 @@
         avoidLabelOverlap: true,
         label: { show: false },
         labelLine: { show: false },
-        itemStyle: { borderWidth: 2, borderColor: "rgb(var(--ds-rgb-elevated, 255 255 255))" },
+        itemStyle: { borderWidth: 2, borderColor: "var(--dsw-alias-bg-layer-1, #fff)" },
         data: models.map((model, index) => ({
           name: model.model,
           value: model.tokens,
@@ -1690,10 +1802,10 @@
         confine: true,
         trigger: "axis",
         ...tooltipInteractionOption(),
-        axisPointer: { type: "shadow", shadowStyle: { color: "rgba(2,14,54,0.04)" } },
+        axisPointer: { type: "shadow", shadowStyle: { color: "var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,0.04))" } },
         extraCssText: getTooltipCss(),
         formatter: (params) => tooltipHtml(params[0]?.name || "", [
-          { color: params[0]?.color || "#0C70F3", label: "Tokens", value: formatInteger(params[0]?.value || 0) },
+          { color: params[0]?.color || "#FF810C", label: "Tokens", value: formatInteger(params[0]?.value || 0) },
         ]),
       },
       xAxis: {
@@ -1731,31 +1843,31 @@
 
   function chartPalette(index) {
     return [
-      "#0C70F3",
+      "#FF810C",
+      "#FFA10A",
+      "#FFC14D",
+      "#3964FE",
       "#60B3FE",
       "#A0DCFD",
-      "#6E8BFF",
-      "#7BCBFF",
-      "#A7B8FF",
       "#54D2B6",
-      "#B8E7FF",
+      "#A7B8FF",
     ][index % 8];
   }
 
   function tooltipHtml(title, rows) {
     const body = rows.map((row) => `
-      <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;color:rgb(var(--ds-rgb-label-2));font-size:var(--ds-font-size-sp);line-height:var(--ds-line-height-sp);">
-        <span style="display:flex;align-items:center;gap:8px;">
-          <span style="width:12px;height:12px;border-radius:2px;background:${row.color};display:inline-block;"></span>
-          <span>${escapeHtml(row.label)}</span>
-        </span>
-        <span style="font-variant-numeric:tabular-nums;color:rgb(var(--ds-rgb-label-2));">${escapeHtml(row.value)}</span>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:24px;min-width:0;color:var(--dsw-alias-label-primary);font:var(--dsw-font-s-14,14px/22px inherit);font-variant-numeric:tabular-nums;">
+        <div style="display:flex;align-items:center;gap:8px;min-width:0;">
+          <div style="flex:0 0 auto;width:12px;height:12px;border-radius:2px;background:${row.color};"></div>
+          <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(row.label)}</div>
+        </div>
+        <div style="flex:0 0 auto;">${escapeHtml(row.value)}</div>
       </div>
     `).join("");
     return `
-      <div style="display:flex;flex-direction:column;gap:8px;min-width:150px;">
-        <div style="color:rgb(var(--ds-rgb-label-1));font-weight:var(--ds-font-weight-strong);font-size:var(--ds-font-size-sp);line-height:var(--ds-line-height-sp);">${escapeHtml(title)}</div>
-        ${body}
+      <div style="display:flex;flex-direction:column;min-width:0;gap:4px;">
+        <div style="color:var(--dsw-alias-label-primary);font:var(--dsw-font-base-strong-16,500 16px/24px inherit);font-variant-numeric:tabular-nums;">${escapeHtml(title)}</div>
+        <div style="display:flex;flex-direction:column;gap:2px;">${body}</div>
       </div>
     `;
   }
@@ -1823,10 +1935,11 @@
         transform-origin: center center !important;
       }
       #${CHAT_USAGE_BUTTON_ID}:hover .ds-button__background {
-        background: rgba(2, 14, 54, 0.06);
+        background: var(--dsw-alias-interactive-bg-hover, rgba(2, 14, 54, 0.06));
       }
-      body.dark #${CHAT_USAGE_BUTTON_ID}:hover .ds-button__background {
-        background: rgba(255, 255, 255, 0.08);
+      body.dark #${CHAT_USAGE_BUTTON_ID}:hover .ds-button__background,
+      body[data-ds-dark-theme] #${CHAT_USAGE_BUTTON_ID}:hover .ds-button__background {
+        background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.08));
       }
       #${CHAT_USAGE_BUTTON_ID}:focus-visible {
         outline: 2px solid rgba(57, 100, 254, 0.7);
@@ -2005,8 +2118,25 @@
       panel.className = "dsapi-plus-panel";
     }
 
-    if (!panel.isConnected || panel.parentNode !== reference.parentNode || panel.nextSibling !== reference) {
-      reference.parentNode.insertBefore(panel, reference);
+    // 已挂载则不要反复 insertBefore，否则会打断用户文字选区
+    if (!panel.isConnected) {
+      const parent = reference.parentNode;
+      if (!parent) return null;
+      if (reference.id === PANEL_ID || reference === panel) {
+        parent.appendChild(panel);
+      } else if (reference.matches?.('[role="heading"]') || reference.getAttribute?.("aria-level") === "1") {
+        // 参考节点是标题时，插到标题后面
+        reference.after(panel);
+      } else {
+        parent.insertBefore(panel, reference);
+      }
+    } else if (panel.parentNode !== reference.parentNode && reference !== panel && reference.id !== PANEL_ID) {
+      // 父节点被 SPA 重建时再迁移一次
+      if (reference.matches?.('[role="heading"]') || reference.getAttribute?.("aria-level") === "1") {
+        reference.after(panel);
+      } else {
+        reference.parentNode?.insertBefore(panel, reference);
+      }
     }
 
     return panel;
@@ -2018,7 +2148,13 @@
 
     const usageTitle = findExactTextElement("用量信息");
     if (usageTitle && usageTitle.parentElement) {
-      return usageTitle.nextElementSibling || usageTitle.parentElement.firstElementChild;
+      let sibling = usageTitle.nextElementSibling;
+      // 跳过自身面板，避免 reference 指向 panel 时反复重排
+      while (sibling && sibling.id === PANEL_ID) {
+        sibling = sibling.nextElementSibling;
+      }
+      if (sibling) return sibling;
+      return usageTitle;
     }
 
     const main = document.querySelector("main");
@@ -2118,9 +2254,23 @@
       }
     });
 
-    state.observer = new MutationObserver(() => {
+    state.observer = new MutationObserver((mutations) => {
+      // 忽略面板内部与 ECharts tooltip 的 DOM 变动，避免拖选文字时反复 ensurePanel
+      const relevant = mutations.some((mutation) => {
+        const target = mutation.target;
+        if (!(target instanceof Node)) return false;
+        const element = target.nodeType === Node.ELEMENT_NODE ? target : target.parentElement;
+        if (!element) return false;
+        if (element.closest?.(`#${PANEL_ID}`)) return false;
+        if (element.closest?.("div[_echarts_instance_], div[class*='echarts']")) return false;
+        return true;
+      });
+      if (!relevant) return;
+      if (isTextSelecting()) return;
+
       window.clearTimeout(state.mutationTimer);
       state.mutationTimer = window.setTimeout(() => {
+        if (isTextSelecting()) return;
         const panel = ensurePanel();
         if (!panel) return;
         const period = getSelectedPeriod();
