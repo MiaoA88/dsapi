@@ -1,6 +1,6 @@
 # DeepSeek Usage+ — 官方API用量页增强仪表盘
 
-[![Version](https://img.shields.io/badge/version-1.11.0-blue)](https://github.com/miaoa88/dsapi)
+[![Version](https://img.shields.io/badge/version-1.11.2-blue)](https://github.com/miaoa88/dsapi)
 
 DeepSeek 官方用量页已有总览与趋势。本脚本专注**官方未覆盖的增强分析**：输入/输出拆分、缓存命中、均价、预估可用、模型明细表与结构图表；并在对话页提供用量入口。时间维度与官方筛选同步。
 
@@ -58,6 +58,10 @@ DeepSeek 官方用量页已有总览与趋势。本脚本专注**官方未覆盖
 ## License
 
 MIT
+
+## v1.11.2 更新日志
+
+- 代码清理：删除未使用函数/字段，简化插入点与今日消费计算路径。
 
 ## v1.11.0 更新日志
 

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DeepSeek Usage+ — 官方API用量页增强仪表盘
 // @namespace    https://platform.deepseek.com/
-// @version      1.11.1
+// @version      1.11.2
 // @description  DeepSeek 官方API用量页增强分析：在官方总览之外补充输入/输出拆分、缓存命中、均价、预估可用、模型明细表与结构图表，并在对话页提供用量入口。
 // @author       miaoa88
 // @match        https://platform.deepseek.com/*
@@ -932,10 +932,6 @@
       }
       const custom = parseCustomDateRangeText(officialLabel);
       if (custom) return custom;
-      if (preset === "custom") {
-        const fallbackCustom = parseCustomDateRangeText(officialLabel);
-        if (fallbackCustom) return fallbackCustom;
-      }
     }
 
     // 兼容旧版月份 select
@@ -969,7 +965,6 @@
 
     return {
       range,
-      period: range.key,
       rangeLabel: formatRangeSubtitle(range),
       summary: normalizeSummary(getBizData(summaryJson)),
       amount: normalizeAmount(getBizData(amountJson)),
@@ -1510,12 +1505,32 @@
     bindPanelControls(panel);
   }
 
+  function findTodayUsageDay(days) {
+    const todayYmd = formatUtcYmd(new Date());
+    const hit = days.find((day) => bucketTimeToDate(day.date) === todayYmd);
+    if (hit) return hit;
+    for (let i = days.length - 1; i >= 0; i -= 1) {
+      if (days[i].tokens > 0 || days[i].request > 0) return days[i];
+    }
+    return days.length ? days[days.length - 1] : null;
+  }
+
+  function sumTodayActualCnyCost(costBlocks) {
+    const todayYmd = formatUtcYmd(new Date());
+    let total = 0;
+    for (const block of costBlocks) {
+      if (block.currency !== "CNY") continue;
+      for (const dayCost of block.days || []) {
+        if (bucketTimeToDate(dayCost.date) === todayYmd) {
+          total += Number(dayCost.amount || 0);
+        }
+      }
+    }
+    return total;
+  }
+
   function buildPanelData(data) {
-    const { range, period, rangeLabel, summary, amount, cost } = data;
-    const monthlyCostText = summary.monthlyCosts.length
-      ? summary.monthlyCosts.map(formatMoney).join(" + ")
-      : "0";
-    const monthCostText = cost.length ? cost.map(formatMoney).join(" + ") : "0";
+    const { range, rangeLabel, summary, amount, cost } = data;
     const sortedModels = amount.models.slice().sort((a, b) => b.tokens - a.tokens || b.request - a.request);
     const tokenTotal = amount.aggregate.tokens;
     const monthCnyCost = sumCurrencyAmount(cost, "CNY", "amount");
@@ -1547,56 +1562,20 @@
       : 0;
     const averageCostDetail = `输入 ${formatCnyAmount(averageInputCostPerMillion)} /1M\n输出 ${formatCnyAmount(averageOutputCostPerMillion)} /1M`;
 
-    const daysArr = amount.days;
-    const now = new Date();
-    const todayYmd = formatUtcYmd(now);
-    const todayDay = now.getUTCDate();
-    let today = daysArr.find((day) => bucketTimeToDate(day.date) === todayYmd) || null;
-    if (!today) {
-      // 兼容仅有日号的旧数据
-      today = daysArr.find((day) => {
-        const match = String(day.date || "").match(/(\d{1,2})$/);
-        return match && Number(match[1]) === todayDay && String(day.date).length <= 2;
-      }) || null;
-    }
-    if (!today) {
-      for (let i = daysArr.length - 1; i >= 0; i--) {
-        if (daysArr[i].tokens > 0 || daysArr[i].request > 0) {
-          today = daysArr[i];
-          break;
-        }
-      }
-      if (!today) today = daysArr.length ? daysArr[daysArr.length - 1] : null;
-    }
-    // 从 cost API 每日数据中获取今天的实际消费金额
-    let todayActualCost = 0;
-    for (const costBlock of cost) {
-      if (costBlock.currency !== "CNY") continue;
-      for (const dayCost of (costBlock.days || [])) {
-        const dayDate = bucketTimeToDate(dayCost.date);
-        if (dayDate === todayYmd) {
-          todayActualCost += (dayCost.amount || 0);
-          continue;
-        }
-        const match = String(dayCost.date || "").match(/(\d{1,2})$/);
-        if (match && Number(match[1]) === todayDay && String(dayCost.date).length <= 2) {
-          todayActualCost += (dayCost.amount || 0);
-        }
-      }
-    }
-
+    const today = findTodayUsageDay(amount.days);
     const todayInputTokens = today ? (today.promptMiss || 0) + (today.promptHit || 0) : 0;
     const todayOutputTokens = today ? (today.response || 0) : 0;
-    // 先用均价估算作为基准
     const todayInputCostEstimated = averageInputCostPerMillion > 0 ? averageInputCostPerMillion * todayInputTokens / 1000000 : 0;
     const todayOutputCostEstimated = averageOutputCostPerMillion > 0 ? averageOutputCostPerMillion * todayOutputTokens / 1000000 : 0;
     const todayTotalCostEstimated = todayInputCostEstimated + todayOutputCostEstimated;
+    const todayActualCost = sumTodayActualCnyCost(cost);
 
-    // 优先使用 cost API 的实际每日数据，估算值作为 fallback
-    let todayTotalCost, todayInputCost, todayOutputCost;
+    // 优先 cost 日汇总，否则用均价估算；有实际总额时按估算比例拆输入/输出
+    let todayTotalCost = todayTotalCostEstimated;
+    let todayInputCost = todayInputCostEstimated;
+    let todayOutputCost = todayOutputCostEstimated;
     if (todayActualCost > 0) {
       todayTotalCost = todayActualCost;
-      // 按实际总额等比缩放输入/输出估算值以保持细分一致
       if (todayTotalCostEstimated > 0) {
         const scale = todayActualCost / todayTotalCostEstimated;
         todayInputCost = todayInputCostEstimated * scale;
@@ -1605,24 +1584,17 @@
         todayInputCost = 0;
         todayOutputCost = 0;
       }
-    } else {
-      todayTotalCost = todayTotalCostEstimated;
-      todayInputCost = todayInputCostEstimated;
-      todayOutputCost = todayOutputCostEstimated;
     }
 
-    const todayCostText = formatCnyAmount(todayTotalCost);
     const todayCostDetail = `输入 ${formatCnyAmount(todayInputCost)}\n输出 ${formatCnyAmount(todayOutputCost)}`;
     const costDetail = (cnyCostBreakdown.input || cnyCostBreakdown.output)
       ? `输入 ${formatCnyAmount(cnyCostBreakdown.input)}\n输出 ${formatCnyAmount(cnyCostBreakdown.output)}`
       : "";
     const usageInput = amount.aggregate.promptMiss + amount.aggregate.promptHit;
-    const usageOutput = amount.aggregate.response;
-    const usageDetail = `输出 ${formatInteger(usageOutput)} tokens`;
+    const usageDetail = `输出 ${formatInteger(amount.aggregate.response)} tokens`;
     const cacheRateValue = cacheHitRate(amount.aggregate);
     const cacheDetail = `命中 ${formatInteger(amount.aggregate.promptHit)}\n未命中 ${formatInteger(amount.aggregate.promptMiss)}`;
     const extraChartsOpen = isExtraChartsOpen();
-
     const updateTime = new Date().toLocaleTimeString("zh-CN");
     const resolvedRangeLabel = rangeLabel || formatRangeSubtitle(range);
 
@@ -1714,21 +1686,14 @@
 
     return {
       range,
-      period,
       rangeLabel: resolvedRangeLabel,
-      summary,
       amount,
       cost,
-      monthlyCostText,
-      monthCostText,
-      monthlyCnyCost,
       monthCnyCost,
       todayTotalCost,
-      todayCostText,
       todayCostDetail,
       costDetail,
       usageInput,
-      usageOutput,
       usageDetail,
       cacheRateValue,
       cacheDetail,
@@ -1758,13 +1723,6 @@
     panel.innerHTML = panelData.html;
     bindPanelControls(panel);
     initCharts(panel, panelData);
-  }
-
-  function formatWallet(item) {
-    const tokenEstimation = item && item.token_estimation != null
-      ? `，约 ${formatInteger(item.token_estimation)} Tokens`
-      : "";
-    return `${formatMoney(item)}${tokenEstimation}`;
   }
 
   function summaryItem(label, value, unit = "", detail = "") {
@@ -2094,10 +2052,6 @@
     };
   }
 
-  function getEcharts() {
-    return Promise.resolve(window.echarts);
-  }
-
   function disposeCharts() {
     stopTooltipKeeper();
     if (state.chartResizeObserver) {
@@ -2325,48 +2279,41 @@
   }
 
   function initCharts(panel, panelData) {
-    getEcharts()
-      .then((echarts) => {
-        if (!panel.isConnected) return;
+    const echarts = window.echarts;
+    if (!echarts || !panel.isConnected) {
+      if (!echarts) console.error("[DeepSeek Usage Panel Plus] ECharts not loaded");
+      return;
+    }
 
-        // 核心图优先；请求趋势在折叠区内，仍初始化，展开时 resize
-        const keys = ["cacheRate", "composition", "tokens", "requests", "models"];
-        for (const key of keys) {
-          const container = panel.querySelector(`[data-dsapi-chart="${key}"]`);
-          const option = buildChartOption(key, panelData);
-          if (!container || !option) continue;
-          const instance = echarts.init(container, null, { renderer: "svg" });
-          const zr = instance.getZr();
-          zr.on("mousemove", (event) => {
-            startTooltipKeeper(instance, event);
-          });
-          zr.on("globalout", () => {
-            if (stopTooltipKeeper(instance)) {
-              flushPendingChartUpdates();
-            }
-          });
-          instance.setOption(option);
-          state.charts.push({ key, instance });
-        }
-
-        state.chartResizeObserver = new ResizeObserver(() => {
-          for (const { instance } of state.charts) {
-            if (!instance.isDisposed()) instance.resize();
-          }
-        });
-        state.chartResizeObserver.observe(panel);
-        const donutFrame = panel.querySelector(".dsapi-plus-model-donut .dsapi-plus-chart-frame");
-        if (donutFrame) state.chartResizeObserver.observe(donutFrame);
-
-        // 等与表格同高的布局稳定后再 resize 环形图
-        window.requestAnimationFrame(() => {
-          resizeAllCharts();
-          window.requestAnimationFrame(resizeAllCharts);
-        });
-      })
-      .catch((error) => {
-        console.error("[DeepSeek Usage Panel Plus] ECharts init failed", error);
+    // 核心图优先；请求趋势在折叠区内仍初始化，展开时 resize
+    const keys = ["cacheRate", "composition", "tokens", "requests", "models"];
+    for (const key of keys) {
+      const container = panel.querySelector(`[data-dsapi-chart="${key}"]`);
+      const option = buildChartOption(key, panelData);
+      if (!container || !option) continue;
+      const instance = echarts.init(container, null, { renderer: "svg" });
+      const zr = instance.getZr();
+      zr.on("mousemove", (event) => startTooltipKeeper(instance, event));
+      zr.on("globalout", () => {
+        if (stopTooltipKeeper(instance)) flushPendingChartUpdates();
       });
+      instance.setOption(option);
+      state.charts.push({ key, instance });
+    }
+
+    state.chartResizeObserver = new ResizeObserver(() => {
+      for (const { instance } of state.charts) {
+        if (!instance.isDisposed()) instance.resize();
+      }
+    });
+    state.chartResizeObserver.observe(panel);
+    const donutFrame = panel.querySelector(".dsapi-plus-model-donut .dsapi-plus-chart-frame");
+    if (donutFrame) state.chartResizeObserver.observe(donutFrame);
+
+    window.requestAnimationFrame(() => {
+      resizeAllCharts();
+      window.requestAnimationFrame(resizeAllCharts);
+    });
   }
 
   function buildRequestChartOption(days) {
@@ -2903,80 +2850,71 @@
 
     // 已挂载则不要反复 insertBefore，否则会打断用户文字选区
     if (!panel.isConnected) {
-      const parent = reference.parentNode;
-      if (!parent) return null;
-      if (reference.id === PANEL_ID || reference === panel) {
-        parent.appendChild(panel);
-      } else if (reference.id === "usage-board" || reference.hasAttribute?.("data-usage-layout-root")) {
-        parent.insertBefore(panel, reference.id === "usage-board" ? reference : reference.nextSibling);
-      } else if (reference.matches?.('[role="heading"]') || reference.getAttribute?.("aria-level") === "1") {
-        reference.after(panel);
-      } else {
-        parent.insertBefore(panel, reference);
-      }
-    } else if (panel.parentNode !== reference.parentNode && reference !== panel && reference.id !== PANEL_ID) {
-      // 父节点被 SPA 重建时再迁移一次
-      if (reference.id === "usage-board") {
-        reference.parentNode?.insertBefore(panel, reference);
-      } else if (reference.matches?.('[role="heading"]') || reference.getAttribute?.("aria-level") === "1") {
-        reference.after(panel);
-      } else {
-        reference.parentNode?.insertBefore(panel, reference);
-      }
+      placePanel(panel, reference);
+    } else if (
+      panel.parentNode !== reference.parentNode &&
+      reference !== panel &&
+      reference.id !== PANEL_ID
+    ) {
+      placePanel(panel, reference);
     }
 
     return panel;
   }
 
+  function skipOwnPanel(node) {
+    let current = node;
+    while (current && current.id === PANEL_ID) current = current.nextElementSibling;
+    return current;
+  }
+
   function findInsertionReference() {
-    // 优先：官方时间筛选/看板之前 → 落在余额卡之后
+    // 优先：官方看板前（余额卡之后）
     const usageBoard = document.getElementById("usage-board");
-    if (usageBoard && usageBoard.parentElement) return usageBoard;
+    if (usageBoard?.parentElement) return usageBoard;
 
     const layoutRoot = document.querySelector('[data-usage-layout-root="true"]');
     if (layoutRoot) {
-      let sibling = layoutRoot.nextElementSibling;
-      while (sibling && sibling.id === PANEL_ID) sibling = sibling.nextElementSibling;
-      if (sibling) return sibling;
-      return layoutRoot.nextElementSibling || layoutRoot;
+      return skipOwnPanel(layoutRoot.nextElementSibling) || layoutRoot;
     }
 
-    const monthlyTitle = findExactTextElement("每月用量");
-    if (monthlyTitle) return climbToSectionRow(monthlyTitle);
-
     const usageTitle = findExactTextElement("用量信息");
-    if (usageTitle && usageTitle.parentElement) {
-      let sibling = usageTitle.nextElementSibling;
-      while (sibling && sibling.id === PANEL_ID) {
-        sibling = sibling.nextElementSibling;
-      }
-      if (sibling) return sibling;
-      return usageTitle;
+    if (usageTitle?.parentElement) {
+      return skipOwnPanel(usageTitle.nextElementSibling) || usageTitle;
     }
 
     const main = document.querySelector("main");
-    return main && main.firstElementChild ? main.firstElementChild : null;
+    return main?.firstElementChild || null;
   }
 
   function findExactTextElement(text) {
     const root = document.querySelector("main") || document.body;
-    const elements = Array.from(root.querySelectorAll("div, span, h1, h2, h3, [role='heading']"));
-    return elements.find((element) => {
+    return Array.from(root.querySelectorAll("div, span, h1, h2, h3, [role='heading']")).find((element) => {
       if (element.id === PANEL_ID || element.closest(`#${PANEL_ID}`)) return false;
-      const value = (element.textContent || "").trim();
-      return value === text;
+      return (element.textContent || "").trim() === text;
     });
   }
 
-  function climbToSectionRow(element) {
-    let node = element;
-    for (let i = 0; i < 4 && node.parentElement; i += 1) {
-      const parent = node.parentElement;
-      const text = (parent.textContent || "").trim();
-      if (text.includes("每月用量") && parent.children.length > 1) return parent;
-      node = parent;
+  function placePanel(panel, reference) {
+    const parent = reference.parentNode;
+    if (!parent) return;
+    if (reference === panel || reference.id === PANEL_ID) {
+      parent.appendChild(panel);
+      return;
     }
-    return element;
+    if (reference.id === "usage-board") {
+      parent.insertBefore(panel, reference);
+      return;
+    }
+    if (reference.hasAttribute?.("data-usage-layout-root")) {
+      reference.after(panel);
+      return;
+    }
+    if (reference.matches?.('[role="heading"]') || reference.getAttribute?.("aria-level") === "1") {
+      reference.after(panel);
+      return;
+    }
+    parent.insertBefore(panel, reference);
   }
 
   async function refresh(force) {
