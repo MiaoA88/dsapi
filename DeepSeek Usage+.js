@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DeepSeek Usage+ — 官方API用量页增强仪表盘
 // @namespace    https://platform.deepseek.com/
-// @version      1.10.1
+// @version      1.11.0
 // @description  DeepSeek 官方API用量页增强分析：在官方总览之外补充输入/输出拆分、缓存命中、均价、预估可用、模型明细表与结构图表，并在对话页提供用量入口。
 // @author       miaoa88
 // @match        https://platform.deepseek.com/*
@@ -21,6 +21,7 @@
   const CHAT_STYLE_ID = "dsapi-plus-chat-style";
   const USAGE_PAGE_URL = "https://platform.deepseek.com/usage";
   const EXTRA_CHARTS_STORAGE_KEY = "dsapi-plus-extra-charts";
+  const PANEL_COLLAPSED_STORAGE_KEY = "dsapi-plus-panel-collapsed";
   const TOKEN_TYPES = {
     request: "REQUEST",
     response: "RESPONSE_TOKEN",
@@ -98,6 +99,14 @@
         -webkit-user-select: text;
         user-select: text;
       }
+      .dsapi-plus-panel.is-collapsed {
+        margin-bottom: 16px;
+      }
+      .dsapi-plus-panel.is-collapsed .dsapi-plus-tagline,
+      .dsapi-plus-panel.is-collapsed .dsapi-plus-body,
+      .dsapi-plus-panel.is-collapsed .dsapi-plus-message {
+        display: none;
+      }
       .dsapi-plus-panel *,
       .dsapi-plus-panel *::before,
       .dsapi-plus-panel *::after {
@@ -164,7 +173,8 @@
       .dsapi-plus-refresh:hover {
         background: var(--dsw-alias-button-primary-hover, #2f54e0);
       }
-      .dsapi-plus-debug {
+      .dsapi-plus-debug,
+      .dsapi-plus-collapse {
         appearance: none;
         border: 0;
         background: transparent;
@@ -172,8 +182,11 @@
         cursor: pointer;
         font: var(--dsw-font-s-14, 14px/22px inherit);
         padding: 0;
+        -webkit-user-select: none;
+        user-select: none;
       }
-      .dsapi-plus-debug:hover {
+      .dsapi-plus-debug:hover,
+      .dsapi-plus-collapse:hover {
         color: var(--dsapi-plus-text);
       }
       .dsapi-plus-body {
@@ -1380,6 +1393,17 @@
     return result;
   }
 
+  function renderPanelHeadActions(statusText, refreshLabel = "刷新") {
+    return `
+      <div class="dsapi-plus-actions">
+        <span class="dsapi-plus-status">${escapeHtml(statusText)}</span>
+        <button type="button" class="dsapi-plus-collapse" aria-expanded="true">收起</button>
+        <button type="button" class="dsapi-plus-debug">调试数据</button>
+        <button type="button" class="dsapi-plus-refresh">${escapeHtml(refreshLabel)}</button>
+      </div>
+    `;
+  }
+
   function renderSkeleton(panel, range) {
     const subtitleText = formatRangeSubtitle(range);
     if (state.charts.length > 0) {
@@ -1389,6 +1413,7 @@
       if (status) status.textContent = "加载中...";
       const banner = panel.querySelector(".dsapi-plus-error-banner");
       if (banner) banner.remove();
+      applyCollapsedState(panel);
       return;
     }
 
@@ -1399,15 +1424,11 @@
           <strong>扩展分析</strong>
           <span class="dsapi-plus-subtitle">${escapeHtml(subtitleText)}</span>
         </div>
-        <div class="dsapi-plus-actions">
-          <span class="dsapi-plus-status">加载中...</span>
-          <button type="button" class="dsapi-plus-debug">调试数据</button>
-          <button type="button" class="dsapi-plus-refresh">刷新</button>
-        </div>
+        ${renderPanelHeadActions("加载中...")}
       </div>
       <div class="dsapi-plus-message">正在读取 DeepSeek 用量接口。</div>
     `;
-    bindRefresh(panel);
+    bindPanelControls(panel);
   }
 
   function errorBannerHTML(message, isAuth) {
@@ -1444,6 +1465,7 @@
       if (body) {
         body.insertAdjacentHTML("afterbegin", errorBannerHTML(message, isAuth));
       }
+      applyCollapsedState(panel);
       return;
     }
 
@@ -1454,15 +1476,11 @@
           <strong>扩展分析</strong>
           <span class="dsapi-plus-subtitle">${escapeHtml(subtitleText)}</span>
         </div>
-        <div class="dsapi-plus-actions">
-          <span class="dsapi-plus-status">加载失败</span>
-          <button type="button" class="dsapi-plus-debug">调试数据</button>
-          <button type="button" class="dsapi-plus-refresh">重试</button>
-        </div>
+        ${renderPanelHeadActions("加载失败", "重试")}
       </div>
       ${errorBannerHTML(message, isAuth)}
     `;
-    bindRefresh(panel);
+    bindPanelControls(panel);
   }
 
   function buildPanelData(data) {
@@ -1587,11 +1605,7 @@
           <strong>扩展分析</strong>
           <span class="dsapi-plus-subtitle">${escapeHtml(resolvedRangeLabel)}，数据可能有约 5 分钟延迟</span>
         </div>
-        <div class="dsapi-plus-actions">
-          <span class="dsapi-plus-status">已更新 ${escapeHtml(updateTime)}</span>
-          <button type="button" class="dsapi-plus-debug">调试数据</button>
-          <button type="button" class="dsapi-plus-refresh">刷新</button>
-        </div>
+        ${renderPanelHeadActions(`已更新 ${updateTime}`)}
       </div>
       <div class="dsapi-plus-tagline">补充官方未展示的拆分、缓存命中、均价与模型明细</div>
 
@@ -1715,8 +1729,7 @@
 
     disposeCharts();
     panel.innerHTML = panelData.html;
-    bindRefresh(panel);
-    bindExtraChartsToggle(panel);
+    bindPanelControls(panel);
     initCharts(panel, panelData);
   }
 
@@ -1793,12 +1806,61 @@
     details.dataset.bound = "1";
     details.addEventListener("toggle", () => {
       setExtraChartsOpen(details.open);
-      window.requestAnimationFrame(() => {
-        for (const { instance } of state.charts) {
-          if (!instance.isDisposed()) instance.resize();
-        }
-      });
+      resizeAllCharts();
     });
+  }
+
+  function isPanelCollapsed() {
+    try {
+      return localStorage.getItem(PANEL_COLLAPSED_STORAGE_KEY) === "1";
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function setPanelCollapsed(collapsed) {
+    try {
+      localStorage.setItem(PANEL_COLLAPSED_STORAGE_KEY, collapsed ? "1" : "0");
+    } catch (error) {
+      // ignore
+    }
+  }
+
+  function resizeAllCharts() {
+    window.requestAnimationFrame(() => {
+      for (const { instance } of state.charts) {
+        if (!instance.isDisposed()) instance.resize();
+      }
+    });
+  }
+
+  function applyCollapsedState(panel, collapsed = isPanelCollapsed()) {
+    if (!panel) return;
+    panel.classList.toggle("is-collapsed", collapsed);
+    const button = panel.querySelector(".dsapi-plus-collapse");
+    if (button) {
+      button.textContent = collapsed ? "展开" : "收起";
+      button.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    }
+    if (!collapsed) resizeAllCharts();
+  }
+
+  function bindCollapse(panel) {
+    const button = panel.querySelector(".dsapi-plus-collapse");
+    if (!button || button.dataset.bound === "1") return;
+    button.dataset.bound = "1";
+    button.addEventListener("click", () => {
+      const next = !panel.classList.contains("is-collapsed");
+      setPanelCollapsed(next);
+      applyCollapsedState(panel, next);
+    });
+    applyCollapsedState(panel);
+  }
+
+  function bindPanelControls(panel) {
+    bindRefresh(panel);
+    bindCollapse(panel);
+    bindExtraChartsToggle(panel);
   }
 
   function sumCurrencyAmount(items, currency, amountKey) {
@@ -2194,7 +2256,7 @@
     headingValues.forEach((el, i) => {
       if (headingTexts[i] != null) el.textContent = headingTexts[i];
     });
-    bindExtraChartsToggle(panel);
+    bindPanelControls(panel);
 
     const detailLayout = panel.querySelector(".dsapi-plus-detail-layout");
     if (detailLayout && detailLayout.children[0]) {
@@ -2815,15 +2877,18 @@
       if (!parent) return null;
       if (reference.id === PANEL_ID || reference === panel) {
         parent.appendChild(panel);
+      } else if (reference.id === "usage-board" || reference.hasAttribute?.("data-usage-layout-root")) {
+        parent.insertBefore(panel, reference.id === "usage-board" ? reference : reference.nextSibling);
       } else if (reference.matches?.('[role="heading"]') || reference.getAttribute?.("aria-level") === "1") {
-        // 参考节点是标题时，插到标题后面
         reference.after(panel);
       } else {
         parent.insertBefore(panel, reference);
       }
     } else if (panel.parentNode !== reference.parentNode && reference !== panel && reference.id !== PANEL_ID) {
       // 父节点被 SPA 重建时再迁移一次
-      if (reference.matches?.('[role="heading"]') || reference.getAttribute?.("aria-level") === "1") {
+      if (reference.id === "usage-board") {
+        reference.parentNode?.insertBefore(panel, reference);
+      } else if (reference.matches?.('[role="heading"]') || reference.getAttribute?.("aria-level") === "1") {
         reference.after(panel);
       } else {
         reference.parentNode?.insertBefore(panel, reference);
@@ -2834,13 +2899,24 @@
   }
 
   function findInsertionReference() {
+    // 优先：官方时间筛选/看板之前 → 落在余额卡之后
+    const usageBoard = document.getElementById("usage-board");
+    if (usageBoard && usageBoard.parentElement) return usageBoard;
+
+    const layoutRoot = document.querySelector('[data-usage-layout-root="true"]');
+    if (layoutRoot) {
+      let sibling = layoutRoot.nextElementSibling;
+      while (sibling && sibling.id === PANEL_ID) sibling = sibling.nextElementSibling;
+      if (sibling) return sibling;
+      return layoutRoot.nextElementSibling || layoutRoot;
+    }
+
     const monthlyTitle = findExactTextElement("每月用量");
     if (monthlyTitle) return climbToSectionRow(monthlyTitle);
 
     const usageTitle = findExactTextElement("用量信息");
     if (usageTitle && usageTitle.parentElement) {
       let sibling = usageTitle.nextElementSibling;
-      // 跳过自身面板，避免 reference 指向 panel 时反复重排
       while (sibling && sibling.id === PANEL_ID) {
         sibling = sibling.nextElementSibling;
       }
