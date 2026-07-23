@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DeepSeek Usage+ — 官方API用量页增强仪表盘
 // @namespace    https://platform.deepseek.com/
-// @version      1.10.0
+// @version      1.10.1
 // @description  DeepSeek 官方API用量页增强分析：在官方总览之外补充输入/输出拆分、缓存命中、均价、预估可用、模型明细表与结构图表，并在对话页提供用量入口。
 // @author       miaoa88
 // @match        https://platform.deepseek.com/*
@@ -415,10 +415,10 @@
         margin-bottom: 8px;
       }
       .dsapi-plus-model-donut .dsapi-plus-chart-frame {
-        height: 180px;
+        height: 220px;
       }
       .dsapi-plus-model-donut .dsapi-plus-chart {
-        height: 180px;
+        height: 220px;
       }
       .dsapi-plus-error {
         border-color: var(--dsw-alias-state-error-secondary, rgba(214, 69, 65, 0.28));
@@ -2384,6 +2384,15 @@
   function buildModelsChartOption(models) {
     if (!models.length) return null;
     const textColor = getChartTextColor();
+    const mutedColor = isDarkTheme() ? "rgba(180, 184, 198, 0.9)" : "rgba(15, 17, 21, 0.55)";
+    const ringBorder = isDarkTheme() ? "rgba(30, 32, 38, 1)" : "#f5f6f7";
+    const totalTokens = models.reduce((sum, model) => sum + (Number(model.tokens) || 0), 0);
+    const data = models.map((model, index) => ({
+      name: model.model,
+      value: model.tokens,
+      itemStyle: { color: chartPalette(index) },
+    }));
+
     return {
       animation: false,
       tooltip: {
@@ -2398,30 +2407,79 @@
       },
       legend: {
         type: "scroll",
-        orient: "vertical",
-        right: 8,
-        top: "middle",
-        width: 118,
-        height: 118,
-        itemWidth: 10,
-        itemHeight: 10,
-        textStyle: { color: textColor, fontSize: 11 },
+        orient: "horizontal",
+        bottom: 0,
+        left: "center",
+        width: "92%",
+        itemWidth: 8,
+        itemHeight: 8,
+        itemGap: 10,
+        icon: "circle",
+        textStyle: {
+          color: textColor,
+          fontSize: 11,
+          lineHeight: 14,
+        },
+        pageIconColor: textColor,
+        pageTextStyle: { color: mutedColor },
+        formatter: (name) => {
+          const short = name.length > 16 ? `${name.slice(0, 14)}…` : name;
+          return short;
+        },
       },
       series: [{
         type: "pie",
-        radius: ["36%", "52%"],
-        center: ["38%", "44%"],
+        name: "模型 Token 占比",
+        radius: ["48%", "72%"],
+        center: ["50%", "44%"],
         avoidLabelOverlap: true,
+        padAngle: 1.5,
+        minAngle: 2,
+        itemStyle: {
+          borderWidth: 2,
+          borderColor: ringBorder,
+          borderRadius: 4,
+        },
         label: { show: false },
         labelLine: { show: false },
-        itemStyle: { borderWidth: 2, borderColor: "var(--dsw-alias-bg-layer-1, #fff)" },
-        data: models.map((model, index) => ({
-          name: model.model,
-          value: model.tokens,
-          itemStyle: { color: chartPalette(index) },
-        })),
-        emphasis: { scale: true, scaleSize: 4 },
+        data,
+        emphasis: {
+          scale: true,
+          scaleSize: 6,
+          itemStyle: {
+            shadowBlur: 12,
+            shadowColor: "rgba(0, 0, 0, 0.12)",
+          },
+        },
       }],
+      // 环心展示总量
+      graphic: [
+        {
+          type: "text",
+          left: "center",
+          top: "38%",
+          style: {
+            text: compactNumber(totalTokens),
+            fill: textColor,
+            fontSize: 16,
+            fontWeight: 600,
+            align: "center",
+            verticalAlign: "middle",
+          },
+        },
+        {
+          type: "text",
+          left: "center",
+          top: "48%",
+          style: {
+            text: "Tokens",
+            fill: mutedColor,
+            fontSize: 12,
+            align: "center",
+            verticalAlign: "middle",
+          },
+        },
+      ],
     };
   }
 
