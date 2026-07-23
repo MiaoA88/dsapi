@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DeepSeek Usage+ — 官方API用量页增强仪表盘
 // @namespace    https://platform.deepseek.com/
-// @version      1.8.1
+// @version      1.9.0
 // @description  DeepSeek 官方API用量页只展示了基础数字和简表。本脚本在其基础上扩展为完整的数据分析仪表盘，包含费用细分、Token 构成、交互图表、缓存命中率等，并在 DeepSeek 对话页左上角补上直达入口，方便一键跳转到API用量页。
 // @author       miaoa88
 // @match        https://platform.deepseek.com/*
@@ -27,8 +27,18 @@
     promptHit: "PROMPT_CACHE_HIT_TOKEN",
   };
 
+  const DATE_PRESET_LABELS = {
+    today: { zh: "今天", en: "Today" },
+    yesterday: { zh: "昨天", en: "Yesterday" },
+    last7Days: { zh: "近 7 天", en: "Last 7 days" },
+    last30Days: { zh: "近 30 天", en: "Last 30 days" },
+    thisMonth: { zh: "本月", en: "This month" },
+    lastMonth: { zh: "上月", en: "Last month" },
+    custom: { zh: "自定义", en: "Custom" },
+  };
+
   const state = {
-    selectedPeriod: "",
+    selectedRangeKey: "",
     observer: null,
     refreshTimer: 0,
     mutationTimer: 0,
@@ -621,46 +631,273 @@
     return score;
   }
 
-  async function loadData(period, signal) {
-    const { year, month } = parsePeriod(period);
-    const query = `year=${encodeURIComponent(year)}&month=${encodeURIComponent(month)}`;
+  function formatUtcYmd(date) {
+    const y = date.getUTCFullYear();
+    const m = String(date.getUTCMonth() + 1).padStart(2, "0");
+    const d = String(date.getUTCDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+
+  function parseUtcYmd(ymd) {
+    const matched = String(ymd || "").match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (!matched) return null;
+    const year = Number(matched[1]);
+    const month = Number(matched[2]);
+    const day = Number(matched[3]);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (
+      date.getUTCFullYear() !== year ||
+      date.getUTCMonth() !== month - 1 ||
+      date.getUTCDate() !== day
+    ) {
+      return null;
+    }
+    return date;
+  }
+
+  function ymdToStartSec(ymd) {
+    const date = parseUtcYmd(ymd);
+    if (!date) return 0;
+    return Math.floor(date.getTime() / 1000);
+  }
+
+  function ymdToEndSecExclusive(ymd) {
+    return ymdToStartSec(ymd) + 86400;
+  }
+
+  function utcToday(now = new Date()) {
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  }
+
+  function addUtcDays(date, days) {
+    return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() + days));
+  }
+
+  function resolvePresetRange(preset, now = new Date()) {
+    const today = utcToday(now);
+    switch (preset) {
+      case "today":
+        return { startDate: formatUtcYmd(today), endDate: formatUtcYmd(today) };
+      case "yesterday": {
+        const day = addUtcDays(today, -1);
+        return { startDate: formatUtcYmd(day), endDate: formatUtcYmd(day) };
+      }
+      case "last7Days":
+        return { startDate: formatUtcYmd(addUtcDays(today, -6)), endDate: formatUtcYmd(today) };
+      case "last30Days":
+        return { startDate: formatUtcYmd(addUtcDays(today, -29)), endDate: formatUtcYmd(today) };
+      case "thisMonth":
+        return {
+          startDate: formatUtcYmd(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1))),
+          endDate: formatUtcYmd(today),
+        };
+      case "lastMonth": {
+        const start = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 1, 1));
+        const end = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 0));
+        return { startDate: formatUtcYmd(start), endDate: formatUtcYmd(end) };
+      }
+      default:
+        return resolvePresetRange("last30Days", now);
+    }
+  }
+
+  function presetLabel(preset) {
+    const item = DATE_PRESET_LABELS[preset] || DATE_PRESET_LABELS.custom;
+    return item.zh;
+  }
+
+  function buildRange({ preset = "custom", startDate, endDate, label }) {
+    const start = startDate;
+    const end = endDate || startDate;
+    const key = `${preset}:${start}:${end}`;
+    return {
+      preset,
+      startDate: start,
+      endDate: end,
+      label: label || presetLabel(preset),
+      key,
+      startSec: ymdToStartSec(start),
+      endSec: ymdToEndSecExclusive(end),
+    };
+  }
+
+  function rangeFromPreset(preset, now = new Date()) {
+    const { startDate, endDate } = resolvePresetRange(preset, now);
+    return buildRange({ preset, startDate, endDate, label: presetLabel(preset) });
+  }
+
+  function formatRangeSubtitle(range) {
+    if (!range) return "UTC";
+    if (range.startDate === range.endDate) {
+      return `${range.label} · ${range.startDate} UTC`;
+    }
+    return `${range.label} · ${range.startDate} ~ ${range.endDate} UTC`;
+  }
+
+  function normalizeFilterText(text) {
+    return String(text || "").replace(/\s+/g, " ").trim();
+  }
+
+  function matchPresetFromLabel(text) {
+    const value = normalizeFilterText(text).toLowerCase();
+    if (!value) return null;
+
+    const rules = [
+      { preset: "today", patterns: ["今天", "today"] },
+      { preset: "yesterday", patterns: ["昨天", "yesterday"] },
+      { preset: "last7Days", patterns: ["近 7 天", "近7天", "last 7 days", "last7days"] },
+      { preset: "last30Days", patterns: ["近 30 天", "近30天", "last 30 days", "last30days"] },
+      { preset: "thisMonth", patterns: ["本月", "this month"] },
+      { preset: "lastMonth", patterns: ["上月", "last month"] },
+      { preset: "custom", patterns: ["自定义", "custom"] },
+    ];
+
+    for (const rule of rules) {
+      if (rule.patterns.some((pattern) => value === pattern.toLowerCase() || value.includes(pattern.toLowerCase()))) {
+        return rule.preset;
+      }
+    }
+    return null;
+  }
+
+  function parseCustomDateRangeText(text) {
+    const value = normalizeFilterText(text);
+    if (!value) return null;
+
+    const isoPairs = value.match(/(\d{4}-\d{1,2}-\d{1,2})/g);
+    if (isoPairs && isoPairs.length >= 2) {
+      return finalizeCustomRange(isoPairs[0], isoPairs[1]);
+    }
+    if (isoPairs && isoPairs.length === 1 && !/[~～至到\-]/.test(value.replace(isoPairs[0], ""))) {
+      return finalizeCustomRange(isoPairs[0], isoPairs[0]);
+    }
+
+    const slashPairs = [...value.matchAll(/(\d{4})[/.](\d{1,2})[/.](\d{1,2})/g)].map((match) => (
+      `${match[1]}-${String(match[2]).padStart(2, "0")}-${String(match[3]).padStart(2, "0")}`
+    ));
+    if (slashPairs.length >= 2) {
+      return finalizeCustomRange(slashPairs[0], slashPairs[1]);
+    }
+
+    return null;
+  }
+
+  function finalizeCustomRange(startRaw, endRaw) {
+    const start = parseUtcYmd(normalizeLooseYmd(startRaw));
+    const end = parseUtcYmd(normalizeLooseYmd(endRaw));
+    if (!start || !end || end < start) return null;
+    const days = Math.round((end - start) / 86400000) + 1;
+    if (days > 31) return null;
+    return buildRange({
+      preset: "custom",
+      startDate: formatUtcYmd(start),
+      endDate: formatUtcYmd(end),
+      label: DATE_PRESET_LABELS.custom.zh,
+    });
+  }
+
+  function normalizeLooseYmd(value) {
+    const matched = String(value || "").match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (!matched) return value;
+    return `${matched[1]}-${String(matched[2]).padStart(2, "0")}-${String(matched[3]).padStart(2, "0")}`;
+  }
+
+  function readOfficialTimeFilterLabel() {
+    const root = document.querySelector("#usage-board") || document.querySelector("main") || document.body;
+    if (!root) return "";
+
+    const nodes = Array.from(root.querySelectorAll("span, div, button, [role='button']"));
+    for (const node of nodes) {
+      if (node.closest(`#${PANEL_ID}`)) continue;
+      const text = normalizeFilterText(node.textContent);
+      if (text !== "时间维度" && text.toLowerCase() !== "time range" && text.toLowerCase() !== "date range") {
+        continue;
+      }
+
+      const row = node.closest("[role='button']") || node.parentElement;
+      if (!row) continue;
+      const parts = Array.from(row.querySelectorAll("span, div"))
+        .map((el) => normalizeFilterText(el.textContent))
+        .filter(Boolean);
+      const label = parts.find((part) => (
+        part !== "时间维度" &&
+        part.toLowerCase() !== "time range" &&
+        part.toLowerCase() !== "date range" &&
+        part.length < 80
+      ));
+      if (label) return label;
+    }
+
+    // 回退：找筛选胶囊中的已知预设文案
+    const board = document.querySelector("#usage-board") || root;
+    const candidates = Array.from(board.querySelectorAll("[role='button'] span, [role='button'] div"));
+    for (const el of candidates) {
+      if (el.closest(`#${PANEL_ID}`)) continue;
+      const text = normalizeFilterText(el.textContent);
+      if (matchPresetFromLabel(text) || parseCustomDateRangeText(text)) return text;
+    }
+    return "";
+  }
+
+  function getSelectedRange() {
+    const officialLabel = readOfficialTimeFilterLabel();
+    if (officialLabel) {
+      const preset = matchPresetFromLabel(officialLabel);
+      if (preset && preset !== "custom") {
+        return rangeFromPreset(preset);
+      }
+      const custom = parseCustomDateRangeText(officialLabel);
+      if (custom) return custom;
+      if (preset === "custom") {
+        const fallbackCustom = parseCustomDateRangeText(officialLabel);
+        if (fallbackCustom) return fallbackCustom;
+      }
+    }
+
+    // 兼容旧版月份 select
+    const selects = Array.from(document.querySelectorAll("select"));
+    for (const select of selects) {
+      const value = select.value || select.selectedOptions?.[0]?.value || "";
+      const matched = String(value).match(/^(\d{4})-(\d{1,2})$/);
+      if (!matched) continue;
+      const year = Number(matched[1]);
+      const month = Number(matched[2]);
+      const start = new Date(Date.UTC(year, month - 1, 1));
+      const end = new Date(Date.UTC(year, month, 0));
+      return buildRange({
+        preset: "custom",
+        startDate: formatUtcYmd(start),
+        endDate: formatUtcYmd(end),
+        label: `${year}-${month}`,
+      });
+    }
+
+    return rangeFromPreset("last30Days");
+  }
+
+  async function loadData(range, signal) {
+    const query = `start=${encodeURIComponent(range.startSec)}&end=${encodeURIComponent(range.endSec)}&tz=0`;
     const [summaryJson, amountJson, costJson] = await Promise.all([
       fetchJson("/api/v0/users/get_user_summary", signal),
-      fetchJson(`/api/v0/usage/amount?${query}`, signal),
-      fetchJson(`/api/v0/usage/cost?${query}`, signal),
+      fetchJson(`/api/v0/usage/by_api_key/amount?${query}`, signal),
+      fetchJson(`/api/v0/usage/by_api_key/cost?${query}`, signal),
     ]);
 
     return {
-      period: `${year}-${month}`,
+      range,
+      period: range.key,
+      rangeLabel: formatRangeSubtitle(range),
       summary: normalizeSummary(getBizData(summaryJson)),
       amount: normalizeAmount(getBizData(amountJson)),
       cost: normalizeCost(getBizData(costJson)),
       debug: {
         auth: { tokenFound: state.tokenSource !== "none", tokenSource: state.tokenSource },
+        range,
         summary: summarizeShape(summaryJson),
         amount: summarizeShape(amountJson),
         cost: summarizeShape(costJson),
       },
     };
-  }
-
-  function parsePeriod(period) {
-    const matched = String(period || "").match(/^(\d{4})-(\d{1,2})$/);
-    if (matched) return { year: Number(matched[1]), month: Number(matched[2]) };
-
-    const now = new Date();
-    return { year: now.getUTCFullYear(), month: now.getUTCMonth() + 1 };
-  }
-
-  function getSelectedPeriod() {
-    const selects = Array.from(document.querySelectorAll("select"));
-    for (const select of selects) {
-      const value = select.value || select.selectedOptions?.[0]?.value || "";
-      if (/^\d{4}-\d{1,2}$/.test(value)) return value;
-    }
-
-    const now = new Date();
-    return `${now.getUTCFullYear()}-${now.getUTCMonth() + 1}`;
   }
 
   function normalizeSummary(raw) {
@@ -686,21 +923,34 @@
     };
   }
 
+  function emptyAggregate() {
+    return { request: 0, response: 0, promptMiss: 0, promptHit: 0, tokens: 0 };
+  }
+
+  function addAggregates(a, b) {
+    return {
+      request: a.request + b.request,
+      response: a.response + b.response,
+      promptMiss: a.promptMiss + b.promptMiss,
+      promptHit: a.promptHit + b.promptHit,
+      tokens: a.tokens + b.tokens,
+    };
+  }
+
   function normalizeAmount(raw) {
-    const data = findUsageDataObject(raw) || {};
+    const data =
+      findObjectWithKeys(raw, ["series", "bucket", "start", "end"]) ||
+      findUsageDataObject(raw) ||
+      {};
+
+    if (Array.isArray(data.series)) {
+      return normalizeAmountFromByApiKey(data);
+    }
+
     const totals = asArray(firstValue(data, ["total", "totals", "models", "model_usage", "modelUsage"]));
     const days = asArray(firstValue(data, ["days", "daily", "daily_usage", "dailyUsage"]));
     const models = totals.map((item) => normalizeModelUsage(getModelName(item), getUsageList(item)));
-    const aggregate = models.reduce(
-      (sum, model) => ({
-        request: sum.request + model.request,
-        response: sum.response + model.response,
-        promptMiss: sum.promptMiss + model.promptMiss,
-        promptHit: sum.promptHit + model.promptHit,
-        tokens: sum.tokens + model.tokens,
-      }),
-      { request: 0, response: 0, promptMiss: 0, promptHit: 0, tokens: 0 }
-    );
+    const aggregate = models.reduce((sum, model) => addAggregates(sum, model), emptyAggregate());
 
     return {
       raw: data,
@@ -708,6 +958,112 @@
       days: normalizeDailyUsage(days),
       aggregate,
     };
+  }
+
+  function normalizeAmountFromByApiKey(data) {
+    const series = asArray(data.series);
+    const modelMap = new Map();
+    const dayMap = new Map();
+
+    for (const item of series) {
+      const modelName = getModelName(item);
+      const buckets = asArray(firstValue(item, ["buckets", "bucket", "data"]));
+      for (const bucket of buckets) {
+        const usage = firstValue(bucket, ["usage", "usages"]) ?? bucket;
+        const modelUsage = normalizeModelUsage(modelName, usage);
+        const date = bucketTimeToDate(firstValue(bucket, ["time", "date", "day", "timestamp"]));
+
+        const prevModel = modelMap.get(modelName) || emptyModelUsage(modelName);
+        modelMap.set(modelName, mergeModelUsage(prevModel, modelUsage));
+
+        if (!date) continue;
+        const day = dayMap.get(date) || {
+          date,
+          models: new Map(),
+          ...emptyAggregate(),
+        };
+        const dayModelPrev = day.models.get(modelName) || emptyModelUsage(modelName);
+        day.models.set(modelName, mergeModelUsage(dayModelPrev, modelUsage));
+        Object.assign(day, addAggregates(day, modelUsage));
+        dayMap.set(date, day);
+      }
+    }
+
+    // 若 series 为空，尝试 models 汇总字段
+    if (!modelMap.size) {
+      for (const item of asArray(data.models)) {
+        const modelUsage = normalizeModelUsage(getModelName(item), getUsageList(item).length ? getUsageList(item) : item);
+        modelMap.set(modelUsage.model, mergeModelUsage(modelMap.get(modelUsage.model) || emptyModelUsage(modelUsage.model), modelUsage));
+      }
+    }
+
+    const models = Array.from(modelMap.values());
+    const days = Array.from(dayMap.values())
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+      .map((day) => ({
+        date: day.date,
+        models: Array.from(day.models.values()),
+        request: day.request,
+        response: day.response,
+        promptMiss: day.promptMiss,
+        promptHit: day.promptHit,
+        tokens: day.tokens,
+      }));
+
+    return {
+      raw: data,
+      models,
+      days,
+      aggregate: models.reduce((sum, model) => addAggregates(sum, model), emptyAggregate()),
+    };
+  }
+
+  function emptyModelUsage(model) {
+    return {
+      model: model || "unknown",
+      request: 0,
+      response: 0,
+      promptMiss: 0,
+      promptHit: 0,
+      promptTotal: 0,
+      tokens: 0,
+      cacheHitRate: 0,
+    };
+  }
+
+  function mergeModelUsage(a, b) {
+    const request = a.request + b.request;
+    const response = a.response + b.response;
+    const promptMiss = a.promptMiss + b.promptMiss;
+    const promptHit = a.promptHit + b.promptHit;
+    const promptTotal = promptMiss + promptHit;
+    const tokens = response + promptMiss + promptHit;
+    return {
+      model: a.model || b.model || "unknown",
+      request,
+      response,
+      promptMiss,
+      promptHit,
+      promptTotal,
+      tokens,
+      cacheHitRate: promptTotal > 0 ? promptHit / promptTotal : 0,
+    };
+  }
+
+  function bucketTimeToDate(time) {
+    if (time == null || time === "") return "";
+    if (typeof time === "string") {
+      if (/^\d{4}-\d{1,2}-\d{1,2}/.test(time)) {
+        return normalizeLooseYmd(time.slice(0, 10));
+      }
+      const asNumber = Number(time);
+      if (Number.isFinite(asNumber)) return bucketTimeToDate(asNumber);
+      return time;
+    }
+    const number = Number(time);
+    if (!Number.isFinite(number)) return String(time);
+    const ms = number > 1e12 ? number : number * 1000;
+    return formatUtcYmd(new Date(ms));
   }
 
   function normalizeDailyUsage(days) {
@@ -737,10 +1093,10 @@
 
   function normalizeModelUsage(model, usage) {
     const usageMap = usageToMap(usage);
-    const request = usageMap[TOKEN_TYPES.request] || 0;
-    const response = usageMap[TOKEN_TYPES.response] || 0;
-    const promptMiss = usageMap[TOKEN_TYPES.promptMiss] || 0;
-    const promptHit = usageMap[TOKEN_TYPES.promptHit] || 0;
+    const request = pickUsageValue(usageMap, [TOKEN_TYPES.request, "request", "REQUEST"]);
+    const response = pickUsageValue(usageMap, [TOKEN_TYPES.response, "responseToken", "response_token", "RESPONSE_TOKEN", "response"]);
+    const promptMiss = pickUsageValue(usageMap, [TOKEN_TYPES.promptMiss, "promptCacheMissToken", "prompt_cache_miss_token", "PROMPT_CACHE_MISS_TOKEN"]);
+    const promptHit = pickUsageValue(usageMap, [TOKEN_TYPES.promptHit, "promptCacheHitToken", "prompt_cache_hit_token", "PROMPT_CACHE_HIT_TOKEN"]);
     const promptTotal = promptMiss + promptHit;
     const tokens = response + promptMiss + promptHit;
 
@@ -756,21 +1112,46 @@
     };
   }
 
+  function pickUsageValue(map, keys) {
+    for (const key of keys) {
+      if (map[key] != null && map[key] !== "") return Number(map[key]) || 0;
+    }
+    return 0;
+  }
+
   function usageToMap(usage) {
     const map = {};
-    if (!Array.isArray(usage)) return map;
-    for (const item of usage) {
-      const type = firstValue(item, ["type", "usage_type", "usageType", "name", "key"]);
-      if (!type) continue;
-      map[type] = Number(firstValue(item, ["amount", "value", "count", "total"]) || 0);
+    if (Array.isArray(usage)) {
+      for (const item of usage) {
+        const type = firstValue(item, ["type", "usage_type", "usageType", "name", "key"]);
+        if (!type) continue;
+        map[type] = Number(firstValue(item, ["amount", "value", "count", "total"]) || 0);
+      }
+      return map;
+    }
+    if (!usage || typeof usage !== "object") return map;
+    for (const [key, value] of Object.entries(usage)) {
+      if (value && typeof value === "object" && !Array.isArray(value)) continue;
+      const number = Number(value);
+      if (Number.isFinite(number)) map[key] = number;
     }
     return map;
   }
 
   function normalizeCost(raw) {
+    const root =
+      findObjectWithKeys(raw, ["data", "series", "bucket", "start", "end"]) ||
+      findUsageDataObject(raw) ||
+      raw ||
+      {};
     const list = Array.isArray(raw)
       ? raw
-      : asArray(firstValue(findUsageDataObject(raw) || raw || {}, ["cost", "costs", "currencies", "data"]));
+      : asArray(firstValue(root, ["cost", "costs", "currencies", "data"]));
+
+    if (list.some(isByApiKeyCostBlock)) {
+      return list.filter(isByApiKeyCostBlock).map(normalizeCostBlockFromSeries);
+    }
+
     return list.map((currencyBlock) => {
       const total = asArray(firstValue(currencyBlock, ["total", "totals", "models", "model_cost", "modelCost"]));
       const days = normalizeDailyCostData(
@@ -793,6 +1174,79 @@
         days,
       };
     });
+  }
+
+  function isByApiKeyCostBlock(block) {
+    if (!block || typeof block !== "object") return false;
+    const series = asArray(firstValue(block, ["series"]));
+    if (!series.length) return false;
+    return series.some((item) => (
+      firstValue(item, ["model", "model_name", "modelName"]) != null ||
+      asArray(firstValue(item, ["buckets", "bucket"])).length > 0
+    ));
+  }
+
+  function normalizeCostBlockFromSeries(currencyBlock) {
+    const series = asArray(firstValue(currencyBlock, ["series"]));
+    const modelMap = new Map();
+    const dayMap = new Map();
+
+    for (const item of series) {
+      const modelName = getModelName(item);
+      const buckets = asArray(firstValue(item, ["buckets", "bucket", "data"]));
+      for (const bucket of buckets) {
+        const extracted = extractBucketCost(firstValue(bucket, ["cost", "amount", "value"]) ?? bucket);
+        const date = bucketTimeToDate(firstValue(bucket, ["time", "date", "day", "timestamp"]));
+
+        const prev = modelMap.get(modelName) || { model: modelName, amount: 0, usageCostMap: {} };
+        prev.amount += extracted.amount;
+        prev.usageCostMap = mergeUsageCostMap(prev.usageCostMap, extracted.usageCostMap);
+        modelMap.set(modelName, prev);
+
+        if (!date) continue;
+        dayMap.set(date, (dayMap.get(date) || 0) + extracted.amount);
+      }
+    }
+
+    const modelCosts = Array.from(modelMap.values());
+    const amount = modelCosts.reduce((sum, item) => sum + item.amount, 0);
+    const days = Array.from(dayMap.entries())
+      .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+      .map(([date, dayAmount]) => ({ date, amount: dayAmount }));
+
+    return {
+      currency: firstValue(currencyBlock, ["currency", "currency_code", "currencyCode"]) || "",
+      amount,
+      modelCosts,
+      days,
+    };
+  }
+
+  function extractBucketCost(cost) {
+    if (cost == null) return { amount: 0, usageCostMap: {} };
+    if (typeof cost === "number" || typeof cost === "string") {
+      return { amount: Number(cost) || 0, usageCostMap: {} };
+    }
+    if (typeof cost !== "object") return { amount: 0, usageCostMap: {} };
+
+    const direct = firstValue(cost, ["amount", "value", "cost", "total"]);
+    if (direct != null && (typeof direct === "number" || typeof direct === "string")) {
+      const usageCostMap = usageToMap(cost);
+      const amount = Number(direct) || 0;
+      return { amount, usageCostMap };
+    }
+
+    const usageCostMap = usageToMap(cost);
+    const amount = Object.values(usageCostMap).reduce((sum, value) => sum + (Number(value) || 0), 0);
+    return { amount, usageCostMap };
+  }
+
+  function mergeUsageCostMap(a, b) {
+    const result = { ...a };
+    for (const [key, value] of Object.entries(b || {})) {
+      result[key] = (Number(result[key]) || 0) + (Number(value) || 0);
+    }
+    return result;
   }
 
   function normalizeDailyCostData(days) {
@@ -882,11 +1336,12 @@
     return result;
   }
 
-  function renderSkeleton(panel, period) {
+  function renderSkeleton(panel, range) {
+    const subtitleText = formatRangeSubtitle(range);
     if (state.charts.length > 0) {
       const subtitle = panel.querySelector(".dsapi-plus-subtitle");
       const status = panel.querySelector(".dsapi-plus-status");
-      if (subtitle) subtitle.textContent = `${escapeHtml(period)} UTC`;
+      if (subtitle) subtitle.textContent = subtitleText;
       if (status) status.textContent = "加载中...";
       const banner = panel.querySelector(".dsapi-plus-error-banner");
       if (banner) banner.remove();
@@ -898,7 +1353,7 @@
       <div class="dsapi-plus-head">
         <div class="dsapi-plus-title">
           <strong>扩展用量</strong>
-          <span class="dsapi-plus-subtitle">${escapeHtml(period)} UTC</span>
+          <span class="dsapi-plus-subtitle">${escapeHtml(subtitleText)}</span>
         </div>
         <div class="dsapi-plus-actions">
           <span class="dsapi-plus-status">加载中...</span>
@@ -924,18 +1379,20 @@
     `;
   }
 
-  function renderError(panel, period, error) {
+  function renderError(panel, range, error) {
     const message = String(error?.message || error || "未知错误");
     const isAuth = /\b(401|403|40002)\b|missing token/i.test(message);
+    const subtitleText = formatRangeSubtitle(range);
     panel.__dsapiPlusDebug = {
       auth: { tokenFound: state.tokenSource !== "none", tokenSource: state.tokenSource },
+      range,
       error: message,
     };
 
     if (state.charts.length > 0) {
       const subtitle = panel.querySelector(".dsapi-plus-subtitle");
       const status = panel.querySelector(".dsapi-plus-status");
-      if (subtitle) subtitle.textContent = `${escapeHtml(period)} UTC`;
+      if (subtitle) subtitle.textContent = subtitleText;
       if (status) status.textContent = "加载失败";
       const existing = panel.querySelector(".dsapi-plus-error-banner");
       if (existing) existing.remove();
@@ -951,7 +1408,7 @@
       <div class="dsapi-plus-head">
         <div class="dsapi-plus-title">
           <strong>扩展用量</strong>
-          <span class="dsapi-plus-subtitle">${escapeHtml(period)} UTC</span>
+          <span class="dsapi-plus-subtitle">${escapeHtml(subtitleText)}</span>
         </div>
         <div class="dsapi-plus-actions">
           <span class="dsapi-plus-status">加载失败</span>
@@ -965,7 +1422,7 @@
   }
 
   function buildPanelData(data) {
-    const { period, summary, amount, cost } = data;
+    const { range, period, rangeLabel, summary, amount, cost } = data;
     const monthlyCostText = summary.monthlyCosts.length
       ? summary.monthlyCosts.map(formatMoney).join(" + ")
       : "0";
@@ -1003,14 +1460,15 @@
 
     const daysArr = amount.days;
     const now = new Date();
+    const todayYmd = formatUtcYmd(now);
     const todayDay = now.getUTCDate();
-    let today = null;
-    for (const day of daysArr) {
-      const match = String(day.date || "").match(/(\d{1,2})$/);
-      if (match && Number(match[1]) === todayDay) {
-        today = day;
-        break;
-      }
+    let today = daysArr.find((day) => bucketTimeToDate(day.date) === todayYmd) || null;
+    if (!today) {
+      // 兼容仅有日号的旧数据
+      today = daysArr.find((day) => {
+        const match = String(day.date || "").match(/(\d{1,2})$/);
+        return match && Number(match[1]) === todayDay && String(day.date).length <= 2;
+      }) || null;
     }
     if (!today) {
       for (let i = daysArr.length - 1; i >= 0; i--) {
@@ -1026,8 +1484,13 @@
     for (const costBlock of cost) {
       if (costBlock.currency !== "CNY") continue;
       for (const dayCost of (costBlock.days || [])) {
+        const dayDate = bucketTimeToDate(dayCost.date);
+        if (dayDate === todayYmd) {
+          todayActualCost += (dayCost.amount || 0);
+          continue;
+        }
         const match = String(dayCost.date || "").match(/(\d{1,2})$/);
-        if (match && Number(match[1]) === todayDay) {
+        if (match && Number(match[1]) === todayDay && String(dayCost.date).length <= 2) {
           todayActualCost += (dayCost.amount || 0);
         }
       }
@@ -1061,7 +1524,10 @@
 
     const todayCostText = formatCnyAmount(todayTotalCost);
     const todayCostDetail = `输入 ${formatCnyAmount(todayInputCost)}\n输出 ${formatCnyAmount(todayOutputCost)}`;
-    const costDetail = `输入 ${formatCnyAmount(cnyCostBreakdown.input)}\n输出 ${formatCnyAmount(cnyCostBreakdown.output)}`;
+    const costDetail = (cnyCostBreakdown.input || cnyCostBreakdown.output)
+      ? `输入 ${formatCnyAmount(cnyCostBreakdown.input)}\n输出 ${formatCnyAmount(cnyCostBreakdown.output)}`
+      : "";
+    const monthlyCostDetail = "";
     const usageInput = amount.aggregate.promptMiss + amount.aggregate.promptHit;
     const usageDetail = `输入 ${formatInteger(usageInput)} tokens\n输出 ${formatInteger(amount.aggregate.response)} tokens`;
 
@@ -1071,7 +1537,7 @@
       <div class="dsapi-plus-head">
         <div class="dsapi-plus-title">
           <strong>扩展用量</strong>
-          <span class="dsapi-plus-subtitle">${escapeHtml(period)} UTC，数据可能有约 5 分钟延迟</span>
+          <span class="dsapi-plus-subtitle">${escapeHtml(rangeLabel || formatRangeSubtitle(range))}，数据可能有约 5 分钟延迟</span>
         </div>
         <div class="dsapi-plus-actions">
           <span class="dsapi-plus-status">已更新 ${escapeHtml(updateTime)}</span>
@@ -1083,10 +1549,10 @@
       <div class="dsapi-plus-body">
         <div class="dsapi-plus-summary">
           ${summaryItem("今日消费", formatCnyValue(todayTotalCost), "CNY", todayCostDetail)}
-          ${summaryItem("本月费用", formatCnyValue(monthlyCnyCost), "CNY", costDetail)}
-          ${summaryItem("选中月份费用", formatCnyValue(monthCnyCost), "CNY", costDetail)}
+          ${summaryItem("本月费用", formatCnyValue(monthlyCnyCost), "CNY", monthlyCostDetail)}
+          ${summaryItem("区间费用", formatCnyValue(monthCnyCost), "CNY", costDetail)}
           ${summaryItem("平均消费", formatCnyValue(averageCostPerMillion), "CNY /1M", averageCostDetail)}
-          ${summaryItem("本月用量", formatInteger(summary.monthlyUsage), "Tokens", usageDetail)}
+          ${summaryItem("区间用量", formatInteger(tokenTotal), "Tokens", usageDetail)}
           ${summaryItem("预估可用", estimatedAvailableTokens ? formatInteger(estimatedAvailableTokens) : "无法估算", estimatedAvailableTokens ? "Tokens" : "")}
         </div>
 
@@ -1129,13 +1595,13 @@
               ${
                 sortedModels.length
                   ? renderModelTable(sortedModels, cost)
-                  : '<div class="dsapi-plus-message">当前月份暂无请求或 Token 用量。</div>'
+                  : '<div class="dsapi-plus-message">当前区间暂无请求或 Token 用量。</div>'
               }
             </div>
             <div class="dsapi-plus-model-donut">
               ${chartHeading("模型分布", sortedModels.length ? `${sortedModels.length} 个活跃模型` : "暂无模型用量")}
               <div class="dsapi-plus-chart-frame">
-                ${sortedModels.length ? '<div class="dsapi-plus-chart" data-dsapi-chart="models"></div>' : '<div class="dsapi-plus-message">当前月份暂无模型用量。</div>'}
+                ${sortedModels.length ? '<div class="dsapi-plus-chart" data-dsapi-chart="models"></div>' : '<div class="dsapi-plus-message">当前区间暂无模型用量。</div>'}
               </div>
             </div>
           </div>
@@ -1144,7 +1610,9 @@
     `;
 
     return {
+      range,
       period,
+      rangeLabel: rangeLabel || formatRangeSubtitle(range),
       summary,
       amount,
       cost,
@@ -1152,6 +1620,7 @@
       monthCostText,
       monthlyCnyCost,
       monthCnyCost,
+      monthlyCostDetail,
       todayTotalCost,
       todayCostText,
       todayCostDetail,
@@ -1226,8 +1695,23 @@
   }
 
   function getCostBreakdown(costBlocks, currency) {
-    const outputTypes = new Set([TOKEN_TYPES.response]);
-    const inputTypes = new Set([TOKEN_TYPES.promptMiss, TOKEN_TYPES.promptHit]);
+    const outputTypes = new Set([
+      TOKEN_TYPES.response,
+      "responseToken",
+      "response_token",
+      "RESPONSE_TOKEN",
+      "response",
+    ]);
+    const inputTypes = new Set([
+      TOKEN_TYPES.promptMiss,
+      TOKEN_TYPES.promptHit,
+      "promptCacheMissToken",
+      "promptCacheHitToken",
+      "prompt_cache_miss_token",
+      "prompt_cache_hit_token",
+      "PROMPT_CACHE_MISS_TOKEN",
+      "PROMPT_CACHE_HIT_TOKEN",
+    ]);
     const result = { input: 0, output: 0 };
 
     for (const block of costBlocks) {
@@ -1307,8 +1791,14 @@
   }
 
   function shortDateLabel(value) {
-    const matched = String(value || "").match(/(\d{1,2})$/);
-    return matched ? `${matched[1]}日` : String(value || "");
+    const ymd = bucketTimeToDate(value);
+    const matched = String(ymd || value || "").match(/(\d{1,2})$/);
+    if (matched) {
+      const monthMatch = String(ymd || value || "").match(/-(\d{1,2})-\d{1,2}$/);
+      if (monthMatch) return `${Number(monthMatch[1])}/${Number(matched[1])}`;
+      return `${matched[1]}日`;
+    }
+    return String(value || "");
   }
 
   function isDarkTheme() {
@@ -1525,12 +2015,14 @@
 
   function updatePanelIncremental(panel, panelData) {
     const {
-      period,
+      range,
+      rangeLabel,
       amount,
       summary,
       cost,
       monthlyCnyCost,
       monthCnyCost,
+      monthlyCostDetail,
       todayTotalCost,
       todayCostDetail,
       costDetail,
@@ -1545,17 +2037,17 @@
 
     const subtitle = panel.querySelector(".dsapi-plus-subtitle");
     const status = panel.querySelector(".dsapi-plus-status");
-    if (subtitle) subtitle.textContent = `${period} UTC，数据可能有约 5 分钟延迟`;
+    if (subtitle) subtitle.textContent = `${rangeLabel || formatRangeSubtitle(range)}，数据可能有约 5 分钟延迟`;
     if (status) status.textContent = `已更新 ${updateTime}`;
 
     const summaryEl = panel.querySelector(".dsapi-plus-summary");
     if (summaryEl) {
       summaryEl.innerHTML =
         summaryItem("今日消费", formatCnyValue(todayTotalCost), "CNY", todayCostDetail) +
-        summaryItem("本月费用", formatCnyValue(monthlyCnyCost), "CNY", costDetail) +
-        summaryItem("选中月份费用", formatCnyValue(monthCnyCost), "CNY", costDetail) +
+        summaryItem("本月费用", formatCnyValue(monthlyCnyCost), "CNY", monthlyCostDetail || "") +
+        summaryItem("区间费用", formatCnyValue(monthCnyCost), "CNY", costDetail) +
         summaryItem("平均消费", formatCnyValue(averageCostPerMillion), "CNY /1M", averageCostDetail) +
-        summaryItem("本月用量", formatInteger(summary.monthlyUsage), "Tokens", usageDetail) +
+        summaryItem("区间用量", formatInteger(tokenTotal), "Tokens", usageDetail) +
         summaryItem("预估可用", estimatedAvailableTokens ? formatInteger(estimatedAvailableTokens) : "无法估算", estimatedAvailableTokens ? "Tokens" : "");
     }
 
@@ -1575,7 +2067,7 @@
     if (detailLayout && detailLayout.children[0]) {
       detailLayout.children[0].innerHTML = sortedModels.length
         ? renderModelTable(sortedModels, cost)
-        : '<div class="dsapi-plus-message">当前月份暂无请求或 Token 用量。</div>';
+        : '<div class="dsapi-plus-message">当前区间暂无请求或 Token 用量。</div>';
     }
 
     const donut = panel.querySelector(".dsapi-plus-model-donut");
@@ -1586,7 +2078,7 @@
         if (sortedModels.length && !hasChart) {
           frame.innerHTML = '<div class="dsapi-plus-chart" data-dsapi-chart="models"></div>';
         } else if (!sortedModels.length && hasChart) {
-          frame.innerHTML = '<div class="dsapi-plus-message">当前月份暂无模型用量。</div>';
+          frame.innerHTML = '<div class="dsapi-plus-message">当前区间暂无模型用量。</div>';
         }
       }
     }
@@ -2187,15 +2679,15 @@
     const panel = ensurePanel();
     if (!panel) return;
 
-    const period = getSelectedPeriod();
-    if (!force && state.selectedPeriod === period && ["1", "error", "loading"].includes(panel.dataset.loaded)) {
+    const range = getSelectedRange();
+    if (!force && state.selectedRangeKey === range.key && ["1", "error", "loading"].includes(panel.dataset.loaded)) {
       return;
     }
 
-    state.selectedPeriod = period;
+    state.selectedRangeKey = range.key;
     panel.dataset.loaded = "loading";
     const requestId = ++state.requestId;
-    renderSkeleton(panel, period);
+    renderSkeleton(panel, range);
 
     state.abortController?.abort();
     state.abortController = new AbortController();
@@ -2203,7 +2695,7 @@
     const timeoutId = setTimeout(() => state.abortController.abort(), 30000);
 
     try {
-      const data = await loadData(period, signal);
+      const data = await loadData(range, signal);
       clearTimeout(timeoutId);
       if (requestId !== state.requestId) return;
       panel.dataset.loaded = "1";
@@ -2214,11 +2706,11 @@
       if (error instanceof DOMException && error.name === "AbortError") {
         if (state.abortController && state.abortController.signal !== signal) return;
         panel.dataset.loaded = "error";
-        renderError(panel, period, new Error("请求超时（30 秒）"));
+        renderError(panel, range, new Error("请求超时（30 秒）"));
         return;
       }
       panel.dataset.loaded = "error";
-      renderError(panel, period, error);
+      renderError(panel, range, error);
       console.error("[DeepSeek Usage Panel Plus]", error);
     }
   }
@@ -2240,7 +2732,7 @@
     }
     disposeCharts();
     state.lastPanelData = null;
-    state.selectedPeriod = "";
+    state.selectedRangeKey = "";
     state.booted = false;
     const panel = document.getElementById(PANEL_ID);
     if (panel) panel.remove();
@@ -2273,9 +2765,9 @@
         if (isTextSelecting()) return;
         const panel = ensurePanel();
         if (!panel) return;
-        const period = getSelectedPeriod();
-        if (period !== state.selectedPeriod || !panel.dataset.loaded) {
-          scheduleRefresh(false);
+        const range = getSelectedRange();
+        if (range.key !== state.selectedRangeKey || !panel.dataset.loaded) {
+          scheduleRefresh(range.key !== state.selectedRangeKey);
         }
       }, 250);
     });

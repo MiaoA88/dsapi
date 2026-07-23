@@ -1,6 +1,6 @@
 # DeepSeek Usage+ — 官方API用量页增强仪表盘
 
-[![Version](https://img.shields.io/badge/version-1.8.1-blue)](https://github.com/miaoa88/dsapi)
+[![Version](https://img.shields.io/badge/version-1.9.0-blue)](https://github.com/miaoa88/dsapi)
 
 DeepSeek 官方API用量页只展示了几个基础数字和一张简表。本脚本在其基础上扩展为完整的数据分析仪表盘，包含费用细分、Token 构成、交互图表、缓存命中率等，并在 DeepSeek 对话页左上角补上直达入口，方便一键跳转到API用量页。
 
@@ -62,6 +62,12 @@ DeepSeek 官方API用量页只展示了几个基础数字和一张简表。本�
 ## License
 
 MIT
+
+## v1.9.0 更新日志
+
+- 时间维度与官方对齐：跟随页面「近 30 天 / 近 7 天 / 本月 / 上月…」筛选。
+- 用量接口切换为 `/api/v0/usage/by_api_key/amount|cost`（`start` / `end` / `tz=0`）。
+- 概览「选中月份费用 / 本月用量」改为「区间费用 / 区间用量」，副标题展示完整 UTC 起止日期。
 
 ## v1.8.1 更新日志
 
