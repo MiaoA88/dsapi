@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         DeepSeek Usage+ — 官方API用量页增强仪表盘
 // @namespace    https://platform.deepseek.com/
-// @version      1.9.0
-// @description  DeepSeek 官方API用量页只展示了基础数字和简表。本脚本在其基础上扩展为完整的数据分析仪表盘，包含费用细分、Token 构成、交互图表、缓存命中率等，并在 DeepSeek 对话页左上角补上直达入口，方便一键跳转到API用量页。
+// @version      1.10.0
+// @description  DeepSeek 官方API用量页增强分析：在官方总览之外补充输入/输出拆分、缓存命中、均价、预估可用、模型明细表与结构图表，并在对话页提供用量入口。
 // @author       miaoa88
 // @match        https://platform.deepseek.com/*
 // @match        https://chat.deepseek.com/*
@@ -20,6 +20,7 @@
   const CHAT_USAGE_BUTTON_ID = "dsapi-plus-chat-usage-button";
   const CHAT_STYLE_ID = "dsapi-plus-chat-style";
   const USAGE_PAGE_URL = "https://platform.deepseek.com/usage";
+  const EXTRA_CHARTS_STORAGE_KEY = "dsapi-plus-extra-charts";
   const TOKEN_TYPES = {
     request: "REQUEST",
     response: "RESPONSE_TOKEN",
@@ -257,10 +258,18 @@
         color: var(--dsw-alias-label-secondary, var(--dsapi-plus-muted));
         font: var(--dsw-font-s-14, 14px/22px inherit);
       }
+      .dsapi-plus-tagline {
+        color: var(--dsw-alias-label-tertiary, var(--dsapi-plus-tertiary));
+        font: var(--dsw-font-s-14, 14px/22px inherit);
+        margin: 4px 0 0;
+      }
       .dsapi-plus-chart-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 12px;
+      }
+      .dsapi-plus-chart-grid--core .dsapi-plus-chart-block:last-child {
+        grid-column: 1 / -1;
       }
       .dsapi-plus-chart-block {
         box-sizing: border-box;
@@ -268,6 +277,38 @@
         background: var(--dsapi-plus-module);
         border-radius: 16px;
         padding: 20px 20px 12px;
+      }
+      .dsapi-plus-extra {
+        box-sizing: border-box;
+        background: var(--dsapi-plus-module);
+        border-radius: 16px;
+        padding: 12px 16px 16px;
+      }
+      .dsapi-plus-extra > summary {
+        cursor: pointer;
+        list-style: none;
+        color: var(--dsapi-plus-text);
+        font: var(--dsw-font-s-strong-14, 500 14px/22px inherit);
+        user-select: none;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .dsapi-plus-extra > summary::-webkit-details-marker {
+        display: none;
+      }
+      .dsapi-plus-extra > summary::after {
+        content: "展开";
+        color: var(--dsw-alias-label-tertiary, var(--dsapi-plus-tertiary));
+        font: var(--dsw-font-s-14, 14px/22px inherit);
+        font-weight: 400;
+      }
+      .dsapi-plus-extra[open] > summary::after {
+        content: "收起";
+      }
+      .dsapi-plus-extra-body {
+        margin-top: 12px;
       }
       .dsapi-plus-chart-heading {
         display: flex;
@@ -387,6 +428,9 @@
       @media (max-width: 920px) {
         .dsapi-plus-chart-grid {
           grid-template-columns: 1fr;
+        }
+        .dsapi-plus-chart-grid--core .dsapi-plus-chart-block:last-child {
+          grid-column: auto;
         }
         .dsapi-plus-detail-layout {
           grid-template-columns: 1fr;
@@ -1352,7 +1396,7 @@
     panel.innerHTML = `
       <div class="dsapi-plus-head">
         <div class="dsapi-plus-title">
-          <strong>扩展用量</strong>
+          <strong>扩展分析</strong>
           <span class="dsapi-plus-subtitle">${escapeHtml(subtitleText)}</span>
         </div>
         <div class="dsapi-plus-actions">
@@ -1407,7 +1451,7 @@
     panel.innerHTML = `
       <div class="dsapi-plus-head">
         <div class="dsapi-plus-title">
-          <strong>扩展用量</strong>
+          <strong>扩展分析</strong>
           <span class="dsapi-plus-subtitle">${escapeHtml(subtitleText)}</span>
         </div>
         <div class="dsapi-plus-actions">
@@ -1527,17 +1571,21 @@
     const costDetail = (cnyCostBreakdown.input || cnyCostBreakdown.output)
       ? `输入 ${formatCnyAmount(cnyCostBreakdown.input)}\n输出 ${formatCnyAmount(cnyCostBreakdown.output)}`
       : "";
-    const monthlyCostDetail = "";
     const usageInput = amount.aggregate.promptMiss + amount.aggregate.promptHit;
-    const usageDetail = `输入 ${formatInteger(usageInput)} tokens\n输出 ${formatInteger(amount.aggregate.response)} tokens`;
+    const usageOutput = amount.aggregate.response;
+    const usageDetail = `输出 ${formatInteger(usageOutput)} tokens`;
+    const cacheRateValue = cacheHitRate(amount.aggregate);
+    const cacheDetail = `命中 ${formatInteger(amount.aggregate.promptHit)}\n未命中 ${formatInteger(amount.aggregate.promptMiss)}`;
+    const extraChartsOpen = isExtraChartsOpen();
 
     const updateTime = new Date().toLocaleTimeString("zh-CN");
+    const resolvedRangeLabel = rangeLabel || formatRangeSubtitle(range);
 
     const html = `
       <div class="dsapi-plus-head">
         <div class="dsapi-plus-title">
-          <strong>扩展用量</strong>
-          <span class="dsapi-plus-subtitle">${escapeHtml(rangeLabel || formatRangeSubtitle(range))}，数据可能有约 5 分钟延迟</span>
+          <strong>扩展分析</strong>
+          <span class="dsapi-plus-subtitle">${escapeHtml(resolvedRangeLabel)}，数据可能有约 5 分钟延迟</span>
         </div>
         <div class="dsapi-plus-actions">
           <span class="dsapi-plus-status">已更新 ${escapeHtml(updateTime)}</span>
@@ -1545,50 +1593,64 @@
           <button type="button" class="dsapi-plus-refresh">刷新</button>
         </div>
       </div>
+      <div class="dsapi-plus-tagline">补充官方未展示的拆分、缓存命中、均价与模型明细</div>
 
       <div class="dsapi-plus-body">
         <div class="dsapi-plus-summary">
-          ${summaryItem("今日消费", formatCnyValue(todayTotalCost), "CNY", todayCostDetail)}
-          ${summaryItem("本月费用", formatCnyValue(monthlyCnyCost), "CNY", monthlyCostDetail)}
-          ${summaryItem("区间费用", formatCnyValue(monthCnyCost), "CNY", costDetail)}
-          ${summaryItem("平均消费", formatCnyValue(averageCostPerMillion), "CNY /1M", averageCostDetail)}
-          ${summaryItem("区间用量", formatInteger(tokenTotal), "Tokens", usageDetail)}
-          ${summaryItem("预估可用", estimatedAvailableTokens ? formatInteger(estimatedAvailableTokens) : "无法估算", estimatedAvailableTokens ? "Tokens" : "")}
+          ${renderSummaryCards({
+            todayTotalCost,
+            todayCostDetail,
+            monthCnyCost,
+            costDetail,
+            averageCostPerMillion,
+            averageCostDetail,
+            cacheRateValue,
+            cacheDetail,
+            usageInput,
+            usageDetail,
+            estimatedAvailableTokens,
+          })}
         </div>
 
-        <div class="dsapi-plus-chart-grid">
+        <div class="dsapi-plus-chart-grid dsapi-plus-chart-grid--core">
           <div class="dsapi-plus-chart-block">
-            ${chartHeading("API 请求次数汇总", formatInteger(amount.aggregate.request))}
-            <div class="dsapi-plus-chart-frame">
-              <div class="dsapi-plus-chart" data-dsapi-chart="requests"></div>
-            </div>
-          </div>
-
-          <div class="dsapi-plus-chart-block">
-            ${chartHeading("Tokens 汇总", formatInteger(tokenTotal))}
-            <div class="dsapi-plus-chart-frame">
-              <div class="dsapi-plus-chart" data-dsapi-chart="tokens"></div>
-            </div>
-          </div>
-
-          <div class="dsapi-plus-chart-block">
-            ${chartHeading("缓存命中率", formatPercent(cacheHitRate(amount.aggregate)))}
+            ${chartHeading("缓存命中率", formatPercent(cacheRateValue))}
             <div class="dsapi-plus-chart-frame">
               <div class="dsapi-plus-chart" data-dsapi-chart="cacheRate"></div>
             </div>
           </div>
 
           <div class="dsapi-plus-chart-block">
-            ${chartHeading("Token 构成", `缓存命中 ${formatPercent(cacheHitRate(amount.aggregate))}`)}
+            ${chartHeading("Token 构成", `缓存命中 ${formatPercent(cacheRateValue)}`)}
             <div class="dsapi-plus-chart-frame">
               <div class="dsapi-plus-chart" data-dsapi-chart="composition"></div>
             </div>
           </div>
+
+          <div class="dsapi-plus-chart-block">
+            ${chartHeading("Token 结构趋势", formatInteger(tokenTotal))}
+            <div class="dsapi-plus-chart-frame">
+              <div class="dsapi-plus-chart" data-dsapi-chart="tokens"></div>
+            </div>
+          </div>
         </div>
+
+        <details class="dsapi-plus-extra"${extraChartsOpen ? " open" : ""}>
+          <summary>更多图表 · 请求趋势</summary>
+          <div class="dsapi-plus-extra-body">
+            <div class="dsapi-plus-chart-block" style="padding:0;background:transparent;">
+              ${chartHeading("API 请求趋势", formatInteger(amount.aggregate.request))}
+              <div class="dsapi-plus-chart-frame">
+                <div class="dsapi-plus-chart" data-dsapi-chart="requests"></div>
+              </div>
+            </div>
+          </div>
+        </details>
 
         <div class="dsapi-plus-section">
           <div class="dsapi-plus-section-head">
-            <div class="dsapi-plus-section-title">模型明细</div>
+            <div class="dsapi-plus-section-title">模型增强明细</div>
+            <div class="dsapi-plus-section-meta">含缓存命中与费用</div>
           </div>
           <div class="dsapi-plus-detail-layout">
             <div>
@@ -1599,7 +1661,7 @@
               }
             </div>
             <div class="dsapi-plus-model-donut">
-              ${chartHeading("模型分布", sortedModels.length ? `${sortedModels.length} 个活跃模型` : "暂无模型用量")}
+              ${chartHeading("模型 Token 占比", sortedModels.length ? `${sortedModels.length} 个活跃模型` : "暂无模型用量")}
               <div class="dsapi-plus-chart-frame">
                 ${sortedModels.length ? '<div class="dsapi-plus-chart" data-dsapi-chart="models"></div>' : '<div class="dsapi-plus-message">当前区间暂无模型用量。</div>'}
               </div>
@@ -1612,7 +1674,7 @@
     return {
       range,
       period,
-      rangeLabel: rangeLabel || formatRangeSubtitle(range),
+      rangeLabel: resolvedRangeLabel,
       summary,
       amount,
       cost,
@@ -1620,12 +1682,15 @@
       monthCostText,
       monthlyCnyCost,
       monthCnyCost,
-      monthlyCostDetail,
       todayTotalCost,
       todayCostText,
       todayCostDetail,
       costDetail,
+      usageInput,
+      usageOutput,
       usageDetail,
+      cacheRateValue,
+      cacheDetail,
       sortedModels,
       tokenTotal,
       averageCostPerMillion,
@@ -1651,6 +1716,7 @@
     disposeCharts();
     panel.innerHTML = panelData.html;
     bindRefresh(panel);
+    bindExtraChartsToggle(panel);
     initCharts(panel, panelData);
   }
 
@@ -1674,6 +1740,65 @@
         </div>
       </div>
     `;
+  }
+
+  function renderSummaryCards(input) {
+    const {
+      todayTotalCost,
+      todayCostDetail,
+      monthCnyCost,
+      costDetail,
+      averageCostPerMillion,
+      averageCostDetail,
+      cacheRateValue,
+      cacheDetail,
+      usageInput,
+      usageDetail,
+      estimatedAvailableTokens,
+    } = input;
+
+    return (
+      summaryItem("今日消费", formatCnyValue(todayTotalCost), "CNY", todayCostDetail) +
+      summaryItem("区间费用", formatCnyValue(monthCnyCost), "CNY", costDetail) +
+      summaryItem("平均单价", formatCnyValue(averageCostPerMillion), "CNY /1M", averageCostDetail) +
+      summaryItem("缓存命中", formatPercent(cacheRateValue), "", cacheDetail) +
+      summaryItem("输入 Tokens", formatInteger(usageInput), "", usageDetail) +
+      summaryItem(
+        "预估可用",
+        estimatedAvailableTokens ? formatInteger(estimatedAvailableTokens) : "无法估算",
+        estimatedAvailableTokens ? "Tokens" : ""
+      )
+    );
+  }
+
+  function isExtraChartsOpen() {
+    try {
+      return localStorage.getItem(EXTRA_CHARTS_STORAGE_KEY) === "1";
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function setExtraChartsOpen(open) {
+    try {
+      localStorage.setItem(EXTRA_CHARTS_STORAGE_KEY, open ? "1" : "0");
+    } catch (error) {
+      // ignore quota / privacy mode
+    }
+  }
+
+  function bindExtraChartsToggle(panel) {
+    const details = panel.querySelector(".dsapi-plus-extra");
+    if (!details || details.dataset.bound === "1") return;
+    details.dataset.bound = "1";
+    details.addEventListener("toggle", () => {
+      setExtraChartsOpen(details.open);
+      window.requestAnimationFrame(() => {
+        for (const { instance } of state.charts) {
+          if (!instance.isDisposed()) instance.resize();
+        }
+      });
+    });
   }
 
   function sumCurrencyAmount(items, currency, amountKey) {
@@ -2018,15 +2143,15 @@
       range,
       rangeLabel,
       amount,
-      summary,
       cost,
-      monthlyCnyCost,
       monthCnyCost,
-      monthlyCostDetail,
       todayTotalCost,
       todayCostDetail,
       costDetail,
+      usageInput,
       usageDetail,
+      cacheRateValue,
+      cacheDetail,
       sortedModels,
       tokenTotal,
       averageCostPerMillion,
@@ -2042,26 +2167,34 @@
 
     const summaryEl = panel.querySelector(".dsapi-plus-summary");
     if (summaryEl) {
-      summaryEl.innerHTML =
-        summaryItem("今日消费", formatCnyValue(todayTotalCost), "CNY", todayCostDetail) +
-        summaryItem("本月费用", formatCnyValue(monthlyCnyCost), "CNY", monthlyCostDetail || "") +
-        summaryItem("区间费用", formatCnyValue(monthCnyCost), "CNY", costDetail) +
-        summaryItem("平均消费", formatCnyValue(averageCostPerMillion), "CNY /1M", averageCostDetail) +
-        summaryItem("区间用量", formatInteger(tokenTotal), "Tokens", usageDetail) +
-        summaryItem("预估可用", estimatedAvailableTokens ? formatInteger(estimatedAvailableTokens) : "无法估算", estimatedAvailableTokens ? "Tokens" : "");
+      summaryEl.innerHTML = renderSummaryCards({
+        todayTotalCost,
+        todayCostDetail,
+        monthCnyCost,
+        costDetail,
+        averageCostPerMillion,
+        averageCostDetail,
+        cacheRateValue,
+        cacheDetail,
+        usageInput,
+        usageDetail,
+        estimatedAvailableTokens,
+      });
     }
 
+    // 顺序：缓存命中率、Token 构成、Token 结构趋势、请求趋势、模型占比
     const headingValues = panel.querySelectorAll(".dsapi-plus-chart-heading-value");
     const headingTexts = [
-      formatInteger(amount.aggregate.request),
+      formatPercent(cacheRateValue),
+      `缓存命中 ${formatPercent(cacheRateValue)}`,
       formatInteger(tokenTotal),
-      formatPercent(cacheHitRate(amount.aggregate)),
-      `缓存命中 ${formatPercent(cacheHitRate(amount.aggregate))}`,
+      formatInteger(amount.aggregate.request),
       sortedModels.length ? `${sortedModels.length} 个活跃模型` : "暂无模型用量",
     ];
     headingValues.forEach((el, i) => {
       if (headingTexts[i] != null) el.textContent = headingTexts[i];
     });
+    bindExtraChartsToggle(panel);
 
     const detailLayout = panel.querySelector(".dsapi-plus-detail-layout");
     if (detailLayout && detailLayout.children[0]) {
@@ -2107,7 +2240,8 @@
       .then((echarts) => {
         if (!panel.isConnected) return;
 
-        const keys = ["requests", "tokens", "cacheRate", "composition", "models"];
+        // 核心图优先；请求趋势在折叠区内，仍初始化，展开时 resize
+        const keys = ["cacheRate", "composition", "tokens", "requests", "models"];
         for (const key of keys) {
           const container = panel.querySelector(`[data-dsapi-chart="${key}"]`);
           const option = buildChartOption(key, panelData);
@@ -2130,6 +2264,13 @@
           for (const { instance } of state.charts) instance.resize();
         });
         state.chartResizeObserver.observe(panel);
+
+        // 若「更多图表」默认展开，补一次 resize 修正宽度
+        window.requestAnimationFrame(() => {
+          for (const { instance } of state.charts) {
+            if (!instance.isDisposed()) instance.resize();
+          }
+        });
       })
       .catch((error) => {
         console.error("[DeepSeek Usage Panel Plus] ECharts init failed", error);
@@ -2152,7 +2293,7 @@
           value: formatInteger(model.request),
         }));
       return tooltipHtml(item.axisValue, modelRows.length ? modelRows : [
-        { color: "#FF810C", label: "API 请求次数汇总", value: formatInteger(item.value) },
+        { color: "#FF810C", label: "API 请求趋势", value: formatInteger(item.value) },
       ]);
     };
     option.series = [
