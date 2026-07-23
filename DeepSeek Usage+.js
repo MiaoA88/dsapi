@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DeepSeek Usage+ — 官方API用量页增强仪表盘
 // @namespace    https://platform.deepseek.com/
-// @version      1.11.0
+// @version      1.11.1
 // @description  DeepSeek 官方API用量页增强分析：在官方总览之外补充输入/输出拆分、缓存命中、均价、预估可用、模型明细表与结构图表，并在对话页提供用量入口。
 // @author       miaoa88
 // @match        https://platform.deepseek.com/*
@@ -415,23 +415,50 @@
         display: grid;
         grid-template-columns: minmax(0, 1fr) minmax(300px, 28%);
         gap: 12px;
-        align-items: start;
+        align-items: stretch;
+      }
+      .dsapi-plus-detail-layout > :first-child {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .dsapi-plus-detail-layout .dsapi-plus-table-card,
+      .dsapi-plus-detail-layout .dsapi-plus-message {
+        flex: 1 1 auto;
+        height: 100%;
       }
       .dsapi-plus-model-donut {
         box-sizing: border-box;
         min-width: 0;
+        min-height: 240px;
+        height: 100%;
         background: var(--dsapi-plus-module);
         border-radius: 16px;
         padding: 20px 20px 12px;
+        display: flex;
+        flex-direction: column;
       }
       .dsapi-plus-model-donut .dsapi-plus-chart-heading {
+        flex: 0 0 auto;
         margin-bottom: 8px;
       }
       .dsapi-plus-model-donut .dsapi-plus-chart-frame {
-        height: 220px;
+        flex: 1 1 auto;
+        min-height: 200px;
+        height: auto;
+        position: relative;
       }
       .dsapi-plus-model-donut .dsapi-plus-chart {
-        height: 220px;
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        min-height: 0;
+      }
+      .dsapi-plus-model-donut .dsapi-plus-message {
+        flex: 1 1 auto;
+        display: flex;
+        align-items: center;
       }
       .dsapi-plus-error {
         border-color: var(--dsw-alias-state-error-secondary, rgba(214, 69, 65, 0.28));
@@ -2323,15 +2350,18 @@
         }
 
         state.chartResizeObserver = new ResizeObserver(() => {
-          for (const { instance } of state.charts) instance.resize();
-        });
-        state.chartResizeObserver.observe(panel);
-
-        // 若「更多图表」默认展开，补一次 resize 修正宽度
-        window.requestAnimationFrame(() => {
           for (const { instance } of state.charts) {
             if (!instance.isDisposed()) instance.resize();
           }
+        });
+        state.chartResizeObserver.observe(panel);
+        const donutFrame = panel.querySelector(".dsapi-plus-model-donut .dsapi-plus-chart-frame");
+        if (donutFrame) state.chartResizeObserver.observe(donutFrame);
+
+        // 等与表格同高的布局稳定后再 resize 环形图
+        window.requestAnimationFrame(() => {
+          resizeAllCharts();
+          window.requestAnimationFrame(resizeAllCharts);
         });
       })
       .catch((error) => {
@@ -2493,7 +2523,7 @@
         type: "pie",
         name: "模型 Token 占比",
         radius: ["48%", "72%"],
-        center: ["50%", "44%"],
+        center: ["50%", "46%"],
         avoidLabelOverlap: true,
         padAngle: 1.5,
         minAngle: 2,
@@ -2514,12 +2544,12 @@
           },
         },
       }],
-      // 环心展示总量
+      // 环心展示总量（随容器变高仍居中在环内）
       graphic: [
         {
           type: "text",
           left: "center",
-          top: "38%",
+          top: "40%",
           style: {
             text: compactNumber(totalTokens),
             fill: textColor,
@@ -2532,7 +2562,7 @@
         {
           type: "text",
           left: "center",
-          top: "48%",
+          top: "49%",
           style: {
             text: "Tokens",
             fill: mutedColor,
